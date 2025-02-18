@@ -90,7 +90,7 @@ def save_model_components(preset, model):
     """
     Save model components based on scenario
     Args:
-        model: DETR_MultiUser model
+        model: DETR_MultiUserJoint model
         save_dir: Directory to save model
         scenario: One of ["full", "feature_extractor", "feature_encoder"]
     """
@@ -210,6 +210,20 @@ def calculate_scores(y_true, y_pred):
 
     return precision_.mean(), recall_.mean(), f1_score_.mean(), accuracy_.mean()
 
+def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103):
+    m = X.shape[0]
+    random_indicies = np.random.shuffle(np.arange(0, m), random_state=random_state)
+    m_train = m * (1 - test_size)
+    indices_train = random_indicies[0:m_train]
+    indices_test = random_indicies[m_train:]
+    X_train = X[indices_train]
+    X_test = X[indices_test]
+    y_train_loc = y_location_n[indices_train]
+    y_test_loc = y_location_n [indices_test]
+    y_train_act = y_activity_n[indices_train]
+    y_test_act = y_activity_n [indices_test]
+
+    return X_train, X_test, y_train_loc, y_test_loc, y_train_act, y_test_act
 def performance_metrics(y_true, y_pred, var_mode="multi_head", var_threshold=0.5):
     # Ensure inputs are numpy arrays
     y_true = np.array(y_true)
@@ -269,6 +283,40 @@ def performance_metrics(y_true, y_pred, var_mode="multi_head", var_threshold=0.5
         'f1_score': f1_score_
     }
 
+
+def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
+    new_data_activity = []
+    new_data_location = []
+
+    zero = np.zeros((5, 1))
+
+    for i in range(0, data_location.shape[0]):
+        sample_location = data_location[i]
+        sample_activity = data_activity[i]
+        if i ==1000:
+            print("ff")
+        # Count non-zero rows-pp
+        legend_non_zero = sample_activity.sum(axis=1) # This gives us which queries are redundant or possible to eliminate
+
+        new_sample_location= np.delete(sample_location, (legend_non_zero == 0).argmax(), axis=0) # deleting the first empy query
+
+        new_sample_activity = np.delete(sample_activity, (legend_non_zero == 0).argmax(), axis=0)
+
+
+        new_sample = np.hstack((new_sample_activity, zero))
+        legend_non_zero = new_sample.sum(axis=1)
+        new_sample[legend_non_zero == 0, :] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+
+
+        if num_object_queries:
+            new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
+            new_sample = np.concatenate((new_sample, new_matrix))
+        new_data_activity.append(new_sample)
+        new_data_location.append(new_sample_location)
+    # we expect to return two arrays...
+    return (np.array(new_data_activity), np.array(new_data_location))
+
+
 def reduce_dataset(data, num_object_queries=None):
     new_data = []
     zero = np.zeros((5, 1))
@@ -283,7 +331,8 @@ def reduce_dataset(data, num_object_queries=None):
         if num_object_queries:
             new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
             new_sample = np.concatenate((new_sample, new_matrix))
-        new_data.append(new_sample)
+        indices = np.random.permutation(5)
+        new_data.append(new_sample[indices])
     return np.array(new_data)
 
 def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_mode="multi_head"):
