@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import json
 import numpy as np
-
+import wandb
 import os
 
 
@@ -439,3 +439,79 @@ def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_
         'perfect_predictions': (np.abs(y_pred - y_true) < 0.5).all(axis=1).mean()
     }
 
+
+def log_attention_weights(model, y_pred, y_actual, epoch):
+    """
+    Log attention weights from all decoder layers to wandb based on count of people.
+    For each count (0-4), plot one random attention weight sample with labels and predictions.
+    """
+    # Convert numpy arrays to torch tensors if needed
+    if isinstance(y_actual, np.ndarray):
+        y_actual = torch.from_numpy(y_actual)
+    if isinstance(y_pred, np.ndarray):
+        y_pred = torch.from_numpy(y_pred)
+
+    # Get count of people (number of non-9 values) in each sequence
+    where_9_happens = y_actual == 9
+    count_no_person = torch.sum(~where_9_happens, dim=1)
+
+    decoder_layers = model.decoder.decoder_layers
+    for layer_idx, layer in enumerate(decoder_layers):
+        if layer_idx != len(decoder_layers) - 1:
+            continue
+
+        attn_weights = layer.cross_attn_weights.detach().clone()
+        if attn_weights is None:
+            continue
+
+        # Average over batch dimension if necessary
+        if attn_weights.dim() > 3:
+            attn_weights = attn_weights.mean(0)
+
+        # For each possible count (0, 1, 2, 3, 4)
+        for i in range(6):
+            # Find examples with this count
+            indices = torch.where(count_no_person == i)[0]
+            if len(indices) == 0:
+                continue
+
+            # Randomly select one example with this count
+            random_idx = indices[torch.randint(0, len(indices), (1,)).item()]
+
+            # Get attention weights for this example
+            example_attn_weights = attn_weights[random_idx]
+
+            # Get actual labels and predictions for this example
+            actual_sequence = y_actual[random_idx].cpu().numpy()
+            pred_sequence = y_pred[random_idx].cpu().numpy()
+
+            # Create heatmap figure with subplots
+            fig, ax = plt.subplots(figsize=(12, 10))
+
+            # Add heatmap
+            sns.heatmap(
+                example_attn_weights.cpu().numpy(),
+                cmap='viridis',
+                xticklabels=range(example_attn_weights.shape[1]),
+                yticklabels=[f'Q {j}' for j in range(example_attn_weights.shape[0])],
+                ax=ax
+            )
+
+            # Add title with sample info
+            plt.title(f'Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
+                      f'Sample Index: {random_idx}\n' +
+                      f'Actual: {actual_sequence}\n' +
+                      f'Prediction: {pred_sequence}',
+                      fontsize=12)
+
+            plt.xlabel('Encoder Sequence Position')
+            plt.ylabel('Query')
+            plt.tight_layout()
+
+            # Log to wandb
+            wandb.log({
+                f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(fig),
+                'epoch': epoch
+            })
+
+        plt.close('all')
