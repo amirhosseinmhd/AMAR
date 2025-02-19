@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from copy import deepcopy
 from sklearn.metrics import accuracy_score
 import wandb
-from utils import performance_metrics
+from utils import *
 from torch.optim.lr_scheduler import LambdaLR
 import math
 from preset import preset
@@ -78,9 +78,6 @@ def train(model: Module,
         total_batches = len(data_train_loader)
 
         for batch_idx, data_batch in enumerate(data_train_loader):
-            if batch_idx == total_batches - 1:
-                continue
-
             data_batch_x, data_batch_y = data_batch
             data_batch_x = data_batch_x.to(device)
             data_batch_y = data_batch_y.to(device)
@@ -95,7 +92,6 @@ def train(model: Module,
 
             predict_train_y = model(data_batch_x)
             var_loss_train = loss(predict_train_y, data_batch_y.float())
-
             optimizer.zero_grad()
             var_loss_train.backward()
             optimizer.step()
@@ -125,6 +121,10 @@ def train(model: Module,
             predict_test_y = predict_test_y.detach().cpu().numpy()
 
             dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
+            # Log attention weights every N batches
+        if var_epoch % 10 == 0:
+            log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
+
 
         # Log metrics
         wandb.log({
