@@ -8,6 +8,7 @@ import os
 preset = {
     #
     ## define model
+    "wandb_name": "DETR",
     "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
     # "model": "MLP",
@@ -63,7 +64,6 @@ preset = {
         "num_decoder_layers": 6,
         "dim_FFN": 512,
     },
-    #
     ## encoding of activities and locations
     "encoding": {
         "activity": {                                   # encoding of different activities
