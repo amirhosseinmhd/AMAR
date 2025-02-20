@@ -41,6 +41,12 @@ def update_config_from_env(config):
         config['model'] = os.environ['MODEL_TYPE']
     if 'WANDB_NAME_' in os.environ:
         config['wandb_name'] = str(os.environ['WANDB_NAME_']).strip()
+    if 'NUM_ATTENTION_HEAD' in os.environ:
+        config['nn']['n_attention_heads'] = int(os.environ['NUM_ATTENTION_HEAD'])
+    if 'EMBEDDING_DIM' in os.environ:
+        config['nn']['d_embedding'] = int(os.environ['EMBEDDING_DIM'])
+    if 'TOKEN_LENGTH' in os.environ:
+        config['nn']['token_length'] = int(os.environ['TOKEN_LENGTH'])
 
     if 'ENVIRONMENTS_EXP' in os.environ:
         # Split by comma and strip whitespace

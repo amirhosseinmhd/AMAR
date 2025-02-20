@@ -44,8 +44,9 @@ echo "Python version: $(python --version)"
 # export ENVIRONMENTS_EXP=classroom
 # export NUM_DECODER_LAYERS=6
 
-export WANDB_NAME_= _T_2
-export TEMP_CROSS_ATTENTION = 2
+export TOKEN_LENGTH=100
+export EMBEDDING_DIM=10
+export NUM_ATTENTION_HEAD=4
 
 # export MODEL_TYPE=THAT_COUNT
 # Now we change the preset accordingly
