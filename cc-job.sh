@@ -6,7 +6,11 @@
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
 #SBATCH --job-name=csi_job
-#SBATCH --output=timeStream-%j.out
+#SBATCH --output=experiment_results/SLURM_LOG-%j.out
+
+mkdir -p $PROJECT_DIR/experiment_results
+
+export OUTFILE_NAME="experiment_results/timeStream_decoder_-${SLURM_JOB_ID}"
 
 export OUTFILE_NAME="timeStream_decoder_-${SLURM_JOB_ID}"
 
