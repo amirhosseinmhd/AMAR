@@ -296,6 +296,7 @@ class Transformer_Encoder(torch.nn.Module):
     def __init__(self,
                  var_embedding_shape,
                  var_y_shape,
+                 num_attention_heads=2,
                  num_transformer_encoder_layers=4):
         #
         ##
@@ -310,7 +311,7 @@ class Transformer_Encoder(torch.nn.Module):
 
 
         self.layer_embedding_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_feature,
-                                                               var_num_head=2,
+                                                               var_num_head=num_attention_heads,
                                                                var_size_cnn=[1])
                                                        for _ in range(num_transformer_encoder_layers)])
         #
@@ -404,9 +405,9 @@ class TransformerDecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
 
         # Cross attention
-        # self.cross_attn = TemperatureMultiheadAttention(d_model, nhead, dropout=dropout,
-        #                                                 temperature=temp_cross_attention, batch_first=True)
-        self.cross_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True)
+        self.cross_attn = TemperatureMultiheadAttention(d_model, nhead, dropout=dropout,
+                                                        temperature=temp_cross_attention, batch_first=True)
+        # self.cross_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
         self.cross_attn_weights = None
@@ -471,15 +472,15 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 class DETR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, var_y_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, num_queries=5, dim_feedforward=1024):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024):
         super().__init__()
         self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
         var_embedding_shape = (embedding_time_dim, features_dim)
-        self.encoder = Transformer_Encoder(var_embedding_shape, var_y_shape, num_transformer_encoder_layers=4)
-        # Decoder
+        self.encoder = Transformer_Encoder(var_embedding_shape, var_y_shape, num_attention_heads=n_attention_heads,
+                                           num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
             d_model=features_dim,  # Matches encoder output feature dimension
-            nhead=2,
+            nhead=n_attention_heads,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
@@ -692,6 +693,7 @@ def run_that_detr(data_train_x,
 
     #
     var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape, var_y_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
                                     num_decoder_layers=preset["nn"]["num_decoder_layers"],
@@ -725,6 +727,7 @@ def run_that_detr(data_train_x,
         torch.random.manual_seed(var_r + 39)
         #
         model_detr = DETR_MultiUser(var_x_shape, var_y_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
                                     num_decoder_layers=preset["nn"]["num_decoder_layers"],
