@@ -11,12 +11,13 @@ preset = {
     "wandb_name": "DETR",
     "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
+                                                            #JOINT_DETR
     # "model": "MLP",
     ## define task
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 8,
+    "repeat": 5,
     ## path of data
     "path": {
         "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",               # directory of CSI amplitude files
@@ -55,14 +56,17 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.3,  # label smoothing factor
+            "label_smoothing": 0.1,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
-        "cross_attention_temp": 2,
+        "cross_attention_temp": 1,
         "weight_decay": 2e-4,
         "num_obj_queries": 5,
-        "num_decoder_layers": 6,
+        "num_decoder_layers": 5,
         "dim_FFN": 512,
+        "token_length": 200,
+        "d_embedding": 16,
+        "n_attention_heads": 2
     },
     ## encoding of activities and locations
     "encoding": {
@@ -77,7 +81,14 @@ preset = {
             "pick_up":  [0, 0, 0, 0, 0, 0, 1, 0, 0],
             "sit_down": [0, 0, 0, 0, 0, 0, 0, 1, 0],
             "stand_up": [0, 0, 0, 0, 0, 0, 0, 0, 1],
-        },
+        },        # "location": {
+        #     "nan": [0, 0],  # Default origin point
+        #     "a": [0.80, 4.45],  # Location A coordinates
+        #     "b": [0.80, 2.30],  # Location B coordinates
+        #     "c": [3.60, 4.45],  # Location C coordinates
+        #     "d": [3.60, 1.90],  # Location D coordinates
+        #     "e": [8.30, 4.45],  # Location E coordinates
+        # }
         "location": {                                   # encoding of different locations
             "nan":  [0, 0, 0, 0, 0],
             "a":    [1, 0, 0, 0, 0],

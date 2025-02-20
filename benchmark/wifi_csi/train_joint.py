@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from copy import deepcopy
 from sklearn.metrics import accuracy_score
 import wandb
-from utils import *
+from utils import performance_metrics
 from torch.optim.lr_scheduler import LambdaLR
 import math
 from preset import preset
@@ -54,13 +54,13 @@ def train(model: Module,
     var_best_weight = None
     counter = 0  # Counter for patience
 
-    if var_mode == "multi_head":
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=preset["nn"]["scheduler"]["num_warmup_epochs"] * len(data_train_loader),
-            num_training_steps=preset["nn"]["epoch"] * len(data_train_loader),
-            min_lr_ratio=preset["nn"]["scheduler"]["min_lr_ratio"]
-        )
+
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=preset["nn"]["scheduler"]["num_warmup_epochs"] * len(data_train_loader),
+        num_training_steps=preset["nn"]["epoch"] * len(data_train_loader),
+        min_lr_ratio=preset["nn"]["scheduler"]["min_lr_ratio"]
+    )
 
     def apply_augmentation(x_batch):
         noise = torch.randn_like(x_batch) * 0.1
@@ -78,53 +78,66 @@ def train(model: Module,
         total_batches = len(data_train_loader)
 
         for batch_idx, data_batch in enumerate(data_train_loader):
-            data_batch_x, data_batch_y = data_batch
+            if batch_idx == total_batches - 1:
+                continue
+
+            data_batch_x, data_batch_y_act, data_batch_y_loc = data_batch
             data_batch_x = data_batch_x.to(device)
-            data_batch_y = data_batch_y.to(device)
+            data_batch_y_act = data_batch_y_act.to(device)
+            data_batch_y_loc = data_batch_y_loc.to(device)
 
             if model.training:
                 data_batch_x = apply_augmentation(data_batch_x)
 
-            if var_mode == "count_classification":
-                data_batch_y = data_batch_y.sum(axis=1)
-            if var_mode == "baseline":
-                data_batch_y = data_batch_y.reshape(data_batch_y.shape[0], -1)
+            predict_train_y_act, predict_train_y_loc = model(data_batch_x)
 
-            predict_train_y = model(data_batch_x)
-            var_loss_train = loss(predict_train_y, data_batch_y.float())
+            var_loss_train = loss(predict_train_y_act, data_batch_y_act.float(),
+                                  predict_train_y_loc,  data_batch_y_loc.float())
+
             optimizer.zero_grad()
             var_loss_train.backward()
             optimizer.step()
-            if var_mode == "multi_head":
-                scheduler.step()
+            scheduler.step()
 
-        data_batch_y = data_batch_y.detach().cpu().numpy()
-        predict_train_y = predict_train_y.detach().cpu().numpy()
+        data_batch_y_act = data_batch_y_act.detach().cpu().numpy()
+        data_batch_y_loc = data_batch_y_loc.detach().cpu().numpy()
 
-        dict_error_train = performance_metrics(data_batch_y.astype(int), predict_train_y.astype(int),
-                                               var_mode=var_mode, var_threshold=var_threshold)
+        predict_train_y_act = predict_train_y_act.detach().cpu().numpy()
+        predict_train_y_loc = predict_train_y_loc.detach().cpu().numpy()
+
+
+        # dict_error_train = performance_metrics(data_batch_y.astype(int), predict_train_y.astype(int),
+        #                                        var_mode=var_mode, var_threshold=var_threshold)
 
         model.eval()
         with torch.no_grad():
-            data_test_x, data_test_y = next(iter(data_test_loader))
+            data_test_x, data_test_y_act, data_test_y_loc = next(iter(data_test_loader))
             data_test_x = data_test_x.to(device)
-            data_test_y = data_test_y.to(device)
-            if var_mode == "count_classification":
-                data_test_y = data_test_y.sum(axis=1)
-            if var_mode == "baseline":
-                data_test_y = data_test_y.reshape(data_test_y.shape[0], -1)
+            data_test_y_act = data_test_y_act.to(device)
+            data_test_y_loc = data_test_y_loc.to(device)
 
-            predict_test_y = model(data_test_x)
-            var_loss_test = loss(predict_test_y, data_test_y.float())
+            # if var_mode == "count_classification":
+            #     data_test_y_act = data_test_y_act.sum(axis=1)
+            #     data_test_y_loc = data_test_y_loc.sum(axis=1)
+            # if var_mode == "baseline":
+            #     data_test_y_act = data_test_y_act.reshape(data_test_y_act.shape[0], -1)
+            #     data_test_y_loc = data_test_y_loc.reshape(data_test_y_loc.shape[0], -1)
 
-            data_test_y = data_test_y.detach().cpu().numpy()
-            predict_test_y = predict_test_y.detach().cpu().numpy()
+            predict_test_y_act, predict_test_y_loc = model(data_test_x)
+            var_loss_test = loss(predict_test_y_act, data_test_y_act.float(),
+                                 predict_test_y_loc, data_test_y_loc.float())
 
-            dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
-            # Log attention weights every N batches
-        if var_epoch % 10 == 0:
-            log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
-
+            # Convert to numpy for metrics calculation
+            # data_test_y_act = data_test_y_act.detach().cpu().numpy()
+            # data_test_y_loc = data_test_y_loc.detach().cpu().numpy()
+            # predict_test_y_act = predict_test_y_act.detach().cpu().numpy()
+            # predict_test_y_loc = predict_test_y_loc.detach().cpu().numpy()
+            #
+            # # Calculate performance metrics for both activity and location
+            # dict_error_test_act = performance_metrics(data_test_y_act, predict_test_y_act,
+            #                                           var_mode, var_threshold)
+            # dict_error_test_loc = performance_metrics(data_test_y_loc, predict_test_y_loc,
+            #                                           var_mode, var_threshold)
 
         # Log metrics
         wandb.log({

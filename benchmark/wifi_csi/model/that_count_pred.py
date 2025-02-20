@@ -302,27 +302,30 @@ class THAT_COUNT_PRED(torch.nn.Module):
         return var_output
 
 
-class SmoothL1_CountingLoss(torch.nn.Module):
-    def __init__(self, alpha=0.8):
-        """
-        Combined loss function that includes both SmoothL1 loss for individual elements
-        and MSE loss for the total count.
 
-        Args:
-            alpha (float): Weight for SmoothL1 loss (1-alpha will be weight for count loss)
-        """
-        super(SmoothL1_CountingLoss, self).__init__()
-        self.smooth_l1 = torch.nn.SmoothL1Loss()
-        self.alpha = alpha
 
-    def forward(self, predictions, targets):
-        # Element-wise SmoothL1 loss
-        element_loss = self.smooth_l1(predictions, targets)
 
-        # Count loss (difference in sums)
-        pred_sum = torch.sum(predictions, dim=1)
-        target_sum = torch.sum(targets, dim=1)
-        count_loss = torch.mean((pred_sum - target_sum) ** 2)
+# class SmoothL1_CountingLoss(torch.nn.Module):
+#     def __init__(self, alpha=0.8):
+#         """
+#         Combined loss function that includes both SmoothL1 loss for individual elements
+#         and MSE loss for the total count.
+#
+#         Args:
+#             alpha (float): Weight for SmoothL1 loss (1-alpha will be weight for count loss)
+#         """
+#         super(SmoothL1_CountingLoss, self).__init__()
+#         self.smooth_l1 = torch.nn.SmoothL1Loss()
+#         self.alpha = alpha
+#
+#     def forward(self, predictions, targets):
+#         # Element-wise SmoothL1 loss
+#         element_loss = self.smooth_l1(predictions, targets)
+#
+#         # Count loss (difference in sums)
+#         pred_sum = torch.sum(predictions, dim=1)
+#         target_sum = torch.sum(targets, dim=1)
+#         count_loss = torch.mean((pred_sum - target_sum) ** 2)
 
         # Combine losses
         total_loss = self.alpha * element_loss + (1 - self.alpha) * count_loss
@@ -413,7 +416,7 @@ def run_that_count_pred(data_train_x,
                                      weight_decay = 0)
         #
         loss_mode = "count_classification"
-        loss = SmoothL1_CountingLoss(alpha=1)
+        loss = torch.nn.SmoothL1Loss()
         var_time_0 = time.time()
         #
         ## ---------------------------------------- Train -----------------------------------------

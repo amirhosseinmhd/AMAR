@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import json
 import numpy as np
-
+import wandb
 import os
 
 
@@ -90,7 +90,7 @@ def save_model_components(preset, model):
     """
     Save model components based on scenario
     Args:
-        model: DETR_MultiUser model
+        model: DETR_MultiUserJoint model
         save_dir: Directory to save model
         scenario: One of ["full", "feature_extractor", "feature_encoder"]
     """
@@ -210,6 +210,20 @@ def calculate_scores(y_true, y_pred):
 
     return precision_.mean(), recall_.mean(), f1_score_.mean(), accuracy_.mean()
 
+def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103):
+    m = X.shape[0]
+    random_indicies = np.random.shuffle(np.arange(0, m), random_state=random_state)
+    m_train = m * (1 - test_size)
+    indices_train = random_indicies[0:m_train]
+    indices_test = random_indicies[m_train:]
+    X_train = X[indices_train]
+    X_test = X[indices_test]
+    y_train_loc = y_location_n[indices_train]
+    y_test_loc = y_location_n [indices_test]
+    y_train_act = y_activity_n[indices_train]
+    y_test_act = y_activity_n [indices_test]
+
+    return X_train, X_test, y_train_loc, y_test_loc, y_train_act, y_test_act
 def performance_metrics(y_true, y_pred, var_mode="multi_head", var_threshold=0.5):
     # Ensure inputs are numpy arrays
     y_true = np.array(y_true)
@@ -269,6 +283,40 @@ def performance_metrics(y_true, y_pred, var_mode="multi_head", var_threshold=0.5
         'f1_score': f1_score_
     }
 
+
+def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
+    new_data_activity = []
+    new_data_location = []
+
+    zero = np.zeros((5, 1))
+
+    for i in range(0, data_location.shape[0]):
+        sample_location = data_location[i]
+        sample_activity = data_activity[i]
+        if i ==1000:
+            print("ff")
+        # Count non-zero rows-pp
+        legend_non_zero = sample_activity.sum(axis=1) # This gives us which queries are redundant or possible to eliminate
+
+        new_sample_location= np.delete(sample_location, (legend_non_zero == 0).argmax(), axis=0) # deleting the first empy query
+
+        new_sample_activity = np.delete(sample_activity, (legend_non_zero == 0).argmax(), axis=0)
+
+
+        new_sample = np.hstack((new_sample_activity, zero))
+        legend_non_zero = new_sample.sum(axis=1)
+        new_sample[legend_non_zero == 0, :] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+
+
+        if num_object_queries:
+            new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
+            new_sample = np.concatenate((new_sample, new_matrix))
+        new_data_activity.append(new_sample)
+        new_data_location.append(new_sample_location)
+    # we expect to return two arrays...
+    return (np.array(new_data_activity), np.array(new_data_location))
+
+
 def reduce_dataset(data, num_object_queries=None):
     new_data = []
     zero = np.zeros((5, 1))
@@ -283,7 +331,8 @@ def reduce_dataset(data, num_object_queries=None):
         if num_object_queries:
             new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
             new_sample = np.concatenate((new_sample, new_matrix))
-        new_data.append(new_sample)
+        indices = np.random.permutation(5)
+        new_data.append(new_sample[indices])
     return np.array(new_data)
 
 def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_mode="multi_head"):
@@ -390,3 +439,79 @@ def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_
         'perfect_predictions': (np.abs(y_pred - y_true) < 0.5).all(axis=1).mean()
     }
 
+
+def log_attention_weights(model, y_pred, y_actual, epoch):
+    """
+    Log attention weights from all decoder layers to wandb based on count of people.
+    For each count (0-4), plot one random attention weight sample with labels and predictions.
+    """
+    # Convert numpy arrays to torch tensors if needed
+    if isinstance(y_actual, np.ndarray):
+        y_actual = torch.from_numpy(y_actual)
+    if isinstance(y_pred, np.ndarray):
+        y_pred = torch.from_numpy(y_pred)
+
+    # Get count of people (number of non-9 values) in each sequence
+    where_9_happens = y_actual == 9
+    count_no_person = torch.sum(~where_9_happens, dim=1)
+
+    decoder_layers = model.decoder.decoder_layers
+    for layer_idx, layer in enumerate(decoder_layers):
+        if layer_idx != len(decoder_layers) - 1:
+            continue
+
+        attn_weights = layer.cross_attn_weights.detach().clone()
+        if attn_weights is None:
+            continue
+
+        # Average over batch dimension if necessary
+        if attn_weights.dim() > 3:
+            attn_weights = attn_weights.mean(0)
+
+        # For each possible count (0, 1, 2, 3, 4)
+        for i in range(6):
+            # Find examples with this count
+            indices = torch.where(count_no_person == i)[0]
+            if len(indices) == 0:
+                continue
+
+            # Randomly select one example with this count
+            random_idx = indices[torch.randint(0, len(indices), (1,)).item()]
+
+            # Get attention weights for this example
+            example_attn_weights = attn_weights[random_idx]
+
+            # Get actual labels and predictions for this example
+            actual_sequence = y_actual[random_idx].cpu().numpy()
+            pred_sequence = y_pred[random_idx].cpu().numpy()
+
+            # Create heatmap figure with subplots
+            fig, ax = plt.subplots(figsize=(12, 10))
+
+            # Add heatmap
+            sns.heatmap(
+                example_attn_weights.cpu().numpy(),
+                cmap='viridis',
+                xticklabels=range(example_attn_weights.shape[1]),
+                yticklabels=[f'Q {j}' for j in range(example_attn_weights.shape[0])],
+                ax=ax
+            )
+
+            # Add title with sample info
+            plt.title(f'Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
+                      f'Sample Index: {random_idx}\n' +
+                      f'Actual: {actual_sequence}\n' +
+                      f'Prediction: {pred_sequence}',
+                      fontsize=12)
+
+            plt.xlabel('Encoder Sequence Position')
+            plt.ylabel('Query')
+            plt.tight_layout()
+
+            # Log to wandb
+            wandb.log({
+                f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(fig),
+                'epoch': epoch
+            })
+
+        plt.close('all')

@@ -1,17 +1,19 @@
 """
-[file]          that_encoder.py
+[file]          detr.py
 [description]   implement and evaluate WiFi-based model THAT_ENCODER
                 https://github.com/windofshadow/THAT
 """
 #
 ##
+import os
 import time
 import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
 #
+from torch.utils.data import Dataset
 import torch.nn as nn
-from torch.utils.data import TensorDataset
+
 from ptflops import get_model_complexity_info
 from itertools import permutations
 from sklearn.metrics import classification_report, accuracy_score
@@ -21,6 +23,7 @@ from preset import preset
 import torch.nn.functional as F
 from utils import *
 import wandb
+
 
 
 #
@@ -179,6 +182,113 @@ class Encoder(torch.nn.Module):
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
+
+# Depthwise Separable Convolution
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, padding):
+        super(DepthwiseSeparableConv, self).__init__()
+        self.depthwise = nn.Conv1d(
+            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels
+        )
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+
+# Dilated Convolution Block
+class DilatedConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation_rate):
+        super(DilatedConvBlock, self).__init__()
+        self.conv = nn.Conv1d(
+            in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
+        )
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        return x
+
+# Channel Attention Mechanism
+class ChannelAttention(nn.Module):
+    def __init__(self, channels, reduction_ratio=8):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(channels // reduction_ratio, channels),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        b, c, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        return x * y
+
+# Non-Local Block for Global Context Modeling
+class NonLocalBlock(nn.Module):
+    def __init__(self, channels):
+        super(NonLocalBlock, self).__init__()
+        self.theta = nn.Conv1d(channels, channels // 2, kernel_size=1)
+        self.phi = nn.Conv1d(channels, channels // 2, kernel_size=1)
+        self.g = nn.Conv1d(channels, channels // 2, kernel_size=1)
+        self.out_conv = nn.Conv1d(channels // 2, channels, kernel_size=1)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        b, c, t = x.size()
+        theta = self.theta(x).view(b, c // 2, -1)
+        phi = self.phi(x).view(b, c // 2, -1)
+        g = self.g(x).view(b, c // 2, -1)
+        attn = self.softmax(torch.matmul(theta.transpose(1, 2), phi))
+        out = torch.matmul(g, attn.transpose(1, 2))
+        out = self.out_conv(out.view(b, c // 2, t))
+        return x + out
+
+# Backbone Network
+class CNNFeatureExtractor(nn.Module):
+    def __init__(self, input_channels=270, output_channels=270, reduced_channels=128):
+        super(CNNFeatureExtractor, self).__init__()
+        # Linear embedding to reduce channel dimensionality
+        # self.embedding = nn.Linear(input_channels, reduced_channels)
+        # Initial depthwise separable convolution
+        self.initial_conv = DepthwiseSeparableConv(input_channels, output_channels, kernel_size=7, padding=3)
+        # Max pooling to reduce temporal dimension
+        self.pool = nn.MaxPool1d(kernel_size=3, stride=3)
+        # Dilated convolution blocks
+        self.dilated_blocks = nn.Sequential(
+            DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
+            DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
+            DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
+            DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
+        )
+        # Channel attention mechanism
+        # self.channel_attention = ChannelAttention(output_channels)
+        # Non-local block for global context modeling
+        # self.non_local = NonLocalBlock(output_channels)
+        # Final convolution to reduce temporal dimension to T=100
+        self.final_conv = nn.Conv1d(output_channels, output_channels, kernel_size=20, stride=20)
+
+    def forward(self, x):
+        # Input shape: (batch_size, 3000, 270)
+        # x = self.embedding(x)  # Reduce channel dimensionality: (batch_size, 3000, reduced_channels)
+        x = x.permute(0, 2, 1)  # Swap time and feature dimensions: (batch_size, reduced_channels, 3000)
+        x = self.initial_conv(x)
+        x = self.pool(x)  # Reduce temporal dimension: (batch_size, output_channels, 1000)
+        x = self.dilated_blocks(x)  # Apply dilated convolutions
+        # x = self.channel_attention(x)  # Apply channel attention
+        # x = self.non_local(x)  # Apply non-local block
+        x = self.final_conv(x)  # Reduce temporal dimension to T=100: (batch_size, output_channels, 100)
+        x = x.permute(0, 2, 1)  # Swap back: (batch_size, 100, output_channels)
+        return x
+
+
 class THAT_ENCODER(torch.nn.Module):
     #
     ##
@@ -192,127 +302,40 @@ class THAT_ENCODER(torch.nn.Module):
         var_dim_feature = var_x_shape[-1]
         var_dim_time = var_x_shape[-2]
         var_dim_output = var_y_shape[-1]
-    #    self.num_heads = 5
 
-        # Replace the single output layer with multiple prediction heads
-    #    self.layer_output = torch.nn.ModuleList([
-    #        torch.nn.Linear(256 + 32, var_dim_output) for _ in range(self.num_heads)
-     #   ])
+        self.layer_left_gaussian = Gaussian_Position(var_dim_feature, 50)  # 100 tokens for left stream
 
-        #
-        ## ---------------------------------------- left ------------------------------------------
-        #
-        self.layer_left_pooling = torch.nn.AvgPool1d(kernel_size=20, stride=20)
-        self.layer_left_gaussian = Gaussian_Position(var_dim_feature, var_dim_time // 20)
-        #
+
         var_num_left = 4
         var_dim_left = var_dim_feature
         self.layer_left_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_left,
                                                                var_num_head=10,
-                                                               var_size_cnn=[1, 3, 5])
+                                                               var_size_cnn=[1])
                                                        for _ in range(var_num_left)])
         #
         self.layer_left_norm = torch.nn.LayerNorm(var_dim_left, eps=1e-6)
-        #
-        self.layer_left_cnn_0 = torch.nn.Conv1d(in_channels=var_dim_left,
-                                                out_channels=128,
-                                                kernel_size=8)
 
-        self.layer_left_cnn_1 = torch.nn.Conv1d(in_channels=var_dim_left,
-                                                out_channels=128,
-                                                kernel_size=16)
-        #
-        self.layer_left_dropout = torch.nn.Dropout(0.5)
-        #
-        ## --------------------------------------- right ------------------------------------------
-        #
-        self.layer_right_pooling = torch.nn.AdaptiveAvgPool1d(270)
-            # torch.nn.AvgPool1d(kernel_size=20, stride=20))
-        # self.layer_left_pooling = torch.nn.AdaptiveAvgPool1d(270)
-
-        #
-        var_num_right = 1
-        var_dim_right = 270
-        self.layer_right_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_right,
-                                                                var_num_head=10,
-                                                                var_size_cnn=[1, 2, 3])
-                                                        for _ in range(var_num_right)])
-        #
-        self.layer_right_norm = torch.nn.LayerNorm(var_dim_right, eps=1e-6)
-        #
-        self.layer_right_cnn_0 = torch.nn.Conv1d(in_channels=var_dim_right,
-                                                 out_channels=16,
-                                                 kernel_size=2)
-
-        self.layer_right_cnn_1 = torch.nn.Conv1d(in_channels=var_dim_right,
-                                                 out_channels=16,
-                                                 kernel_size=4)
-        #
-        self.layer_right_dropout = torch.nn.Dropout(0.5)
-        #
-        ##
-        self.layer_leakyrelu = torch.nn.LeakyReLU()
-        #
-        ##
-        # self.layer_output = torch.nn.Linear(256 + 32, var_dim_output)
 
     #
     ##
-    def forward(self,
-                var_input):
-        #
-        ##
-        var_t = var_input  # shape (batch_size, time_steps, features)
-        #
-        ## ---------------------------------------- left ------------------------------------------
-        #
-        var_left = torch.permute(var_t, (0, 2, 1))
-        var_left = self.layer_left_pooling(var_left)
-        var_left = torch.permute(var_left, (0, 2, 1))
-        #
-        var_left = self.layer_left_gaussian(var_left)
-        #
-        for layer in self.layer_left_encoder: var_left = layer(var_left)
-        #
-        var_left = self.layer_left_norm(var_left) # 150 x 270
-        # 270 is channel here so each row of 150 will be one sample
+    def forward(self, var_left, var_right):
+        # Process through CNN feature extractor
+        # var_left, var_right = self.feature_extractor(var_input)
 
-        """     #
-                # var_left = torch.permute(var_left, (0, 2, 1)) # 270 x 150
-                # var_left_0 = self.layer_leakyrelu(self.layer_left_cnn_0(var_left)) #torch.Size([1, 128, 143])
-                # this cnn has 270 channel and 150 time stamp
-        
-                # var_left_1 = self.layer_leakyrelu(self.layer_left_cnn_1(var_left))
-                # #
-                # var_left_0 = torch.sum(var_left_0, dim=-1) 128
-                # var_left_1 = torch.sum(var_left_1, dim=-1) 128
-                # #
-                # var_left = torch.concat([var_left_0, var_left_1], dim=-1)
-                # var_left = self.layer_left_dropout(var_left)
-        """
+        # Apply Gaussian position encoding
+        var_left = self.layer_left_gaussian(var_left)  # Output: (batch_size, 100, features)
 
-        #
-        ## --------------------------------------- right ------------------------------------------
-        #
-        var_right = torch.permute(var_t, (0, 2, 1))  # shape (batch_size, features, time_steps)
-        var_right = self.layer_right_pooling(var_right) # ([1, 270, 150])
-        #
-        for layer in self.layer_right_encoder: var_right = layer(var_right)
-        #
-        var_right = self.layer_right_norm(var_right)# torch.Size([1, 270 150)]  # 150 is the channel here -> now turned into 270 by 270
-        #
-        # var_right = torch.permute(var_right, (0, 2, 1))
-
-        var_t = torch.concat([var_left, var_right], dim=1)
-
-        # here add the decoder to the model.
-        ##
-        return var_t
+        # Process left stream through transformer encoders
+        for layer in self.layer_left_encoder:
+            var_left = var_left + layer(var_left)
+        var_left = self.layer_left_norm(var_left)
 
 
+        return var_left
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, d_model=270, nhead=5, num_decoder_layers=6, num_queries=5, dim_feedforward=2048, dropout=0.1, temp_cross_attention=1):
+    def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
+                 temp_cross_attention=1, num_locations=2):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
@@ -336,12 +359,10 @@ class TransformerDecoder(nn.Module):
 
         # Output projection for classification and box prediction
         # Assuming num_classes is the number of activity classes
-        self.class_embed = nn.Linear(d_model, 10)  # 10 activity classes
 
         # Create auxiliary outputs for each decoder layer + final output
-        self.class_embed = nn.ModuleList([
-            nn.Linear(d_model, 10) for _ in range(num_decoder_layers + 1)
-        ])
+        self.class_embed = nn.Linear(d_model, 10)
+        self.location_embed = nn.Linear(d_model, num_locations)
 
     def forward(self, memory):
         """
@@ -359,8 +380,8 @@ class TransformerDecoder(nn.Module):
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
 
         # Store intermediate outputs
-        intermediate = []
-
+        intermediate_act = []
+        intermediate_loc = []
         # Run through decoder layers
         output = tgt
         for i, layer in enumerate(self.decoder_layers):
@@ -370,39 +391,17 @@ class TransformerDecoder(nn.Module):
                 query_pos=query_pos
             )
 
-            # Apply norm and get predictions for this layer
-            normed_output = self.norm(output)
-            pred = self.class_embed[i](normed_output)
-            intermediate.append(pred)
+            pred_activity = self.class_embed(output)
+            pred_location = self.location_embed(output)
+            intermediate_loc.append(pred_location)
+            intermediate_act.append(pred_activity)
 
-        # Final layer norm and prediction
-        output = self.norm(output)
-        pred = self.class_embed[-1](output)
-        intermediate.append(pred)
+        out_ = (torch.stack(intermediate_act), torch.stack(intermediate_loc))
+        # Shape activity: [num_layers, B, num_queries, num_classes]
+        # Shape location: [num_layers, B, num_queries, locations]
 
-        return torch.stack(intermediate)  # Shape: [num_layers + 1, B, num_queries, num_classes]
+        return  out_
 
-
-class TemperatureMultiheadAttention(nn.MultiheadAttention):
-    def __init__(self, embed_dim, num_heads, temperature=2.0, **kwargs):
-        super().__init__(embed_dim, num_heads, **kwargs)
-        self.temperature = temperature
-
-    def forward(self, query, key, value, key_padding_mask=None,
-                need_weights=True, attn_mask=None, average_attn_weights=True):
-        # Regular attention computation
-        attn_output, attn_weights = super().forward(
-            query, key, value,
-            key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
-            attn_mask=attn_mask,
-            average_attn_weights=average_attn_weights
-        )
-
-        # Apply temperature scaling to attention output
-        attn_output = attn_output / self.temperature
-
-        return attn_output, attn_weights
 
 class TransformerDecoderLayer(nn.Module):
     def __init__(self, d_model=270, nhead=8, dim_feedforward=2048, dropout=0.1, temp_cross_attention=1):
@@ -414,7 +413,8 @@ class TransformerDecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
 
         # Cross attention
-        self.cross_attn = TemperatureMultiheadAttention(d_model, nhead, dropout=dropout, temperature=temp_cross_attention, batch_first=True)
+        self.cross_attn = TemperatureMultiheadAttention(d_model, nhead, dropout=dropout,
+                                                        temperature=temp_cross_attention, batch_first=True)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
 
@@ -455,81 +455,67 @@ class TransformerDecoderLayer(nn.Module):
         return tgt
 
 
-class DETR_MultiUser(nn.Module):
-    def __init__(self, var_x_shape, var_y_shape, temp_cross = 1, num_queries=5):
-        super().__init__()
+class TemperatureMultiheadAttention(nn.MultiheadAttention):
+    def __init__(self, embed_dim, num_heads, temperature=2.0, **kwargs):
+        super().__init__(embed_dim, num_heads, **kwargs)
+        self.temperature = temperature
 
+    def forward(self, query, key, value, key_padding_mask=None,
+                need_weights=True, attn_mask=None, average_attn_weights=True):
+        # Regular attention computation
+        attn_output, attn_weights = super().forward(
+            query, key, value,
+            key_padding_mask=key_padding_mask,
+            need_weights=need_weights,
+            attn_mask=attn_mask,
+            average_attn_weights=average_attn_weights
+        )
+
+        # Apply temperature scaling to attention output
+        attn_output = attn_output / self.temperature
+
+        return attn_output, attn_weights
+
+
+class DETR_MultiUserJoint(nn.Module):
+    def __init__(self, var_x_shape, var_y_shape, num_decoder_layers=12, temp_cross=1, num_queries=5, dim_feedforward=1024):
+        super().__init__()
+        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1])
         # Encoder (your existing THAT_ENCODER)
         self.encoder = THAT_ENCODER(var_x_shape, var_y_shape)
         # Decoder
         self.decoder = TransformerDecoder(
             d_model=270,  # Matches encoder output feature dimension
             nhead=6,
-            num_decoder_layers=6,
-            dim_feedforward=2048,
+            num_decoder_layers=num_decoder_layers,
+            dim_feedforward=dim_feedforward,
             dropout=0.1,
             num_queries=num_queries,
             temp_cross_attention=temp_cross
         )
 
     def forward(self, x):
-        # Get encoder features
-        memory = self.encoder(x)  # Shape: (B, 420, 270)
+        # Extracting Features
+        var_left = self.feature_extractor(x)
+        # Getting the memory to query from!
+        var_right = None
+        memory = self.encoder(var_left, var_right)  # Shape: (B, 420, 270)
 
         # Pass through decoder to get predictions from all layers
-        outputs_class = self.decoder(memory)  # Shape: [num_layers + 1, B, num_queries, num_classes]
+        outputs_class_all = self.decoder(memory)  # We expect a tuple here,  Shape: ( [num_layers, B, num_queries, num_classes], shape_locations)
 
-        return outputs_class
+        return outputs_class_all
 
-# class PermutationMatchingLoss(nn.Module):
-#     def __init__(self):
-#         super(PermutationMatchingLoss, self).__init__()
-#         self.ce_loss = nn.CrossEntropyLoss(reduction='none')
-#
-#     def forward(self, predictions, targets):
-#         batch_size, num_heads, num_classes = predictions.shape
-#         assert num_heads == 5, "Number of prediction heads must be 5"
-#         if targets.shape != (batch_size, num_heads, num_classes):
-#             print("target miss match")
-#             print(targets.shape)
-#         all_permutations = list(permutations(range(num_heads)))
-#         best_loss = torch.full((batch_size,), float('inf'), device=predictions.device)
-#         best_perm_indices = torch.zeros(batch_size, dtype=torch.long, device=predictions.device)
-#
-#         for batch_idx in range(batch_size):
-#             for perm_idx, perm in enumerate(all_permutations):
-#                 perm_predictions = predictions[batch_idx, perm, :]
-#                 perm_targets = targets[batch_idx]
-#                 loss = self.ce_loss(perm_predictions, perm_targets.argmax(dim=1))
-#                 loss = loss.mean()  # Average loss across heads for this permutation
-#                 if loss < best_loss[batch_idx]:
-#                     best_loss[batch_idx] = loss
-#                     best_perm_indices[batch_idx] = perm_idx
-#
-#         # Create a new tensor with the best permutations
-#         best_predictions = torch.zeros_like(predictions)
-#         for batch_idx in range(batch_size):
-#             best_perm = all_permutations[best_perm_indices[batch_idx]]
-#             best_predictions[batch_idx] = predictions[batch_idx, best_perm, :]
-#
-#         # Compute the final loss using the best permutations
-#         final_loss = self.ce_loss(best_predictions.view(-1, num_classes), targets.view(-1, num_classes).argmax(dim=1))
-#         return final_loss.mean()
 
 class HungarianMatchingLoss(nn.Module):
+
     def __init__(self, cost_class_weight, aux_loss_weight, label_smoothing, class_imbalance_weight):
-        """
-        Hungarian Matching Loss for multi-user activity recognition with auxiliary losses
-        Args:
-            cost_class: Relative weight of classification loss
-            aux_loss_weight: Weight for auxiliary losses from intermediate decoder layers
-        """
         super().__init__()
         self.cost_class = cost_class_weight
         self.aux_loss_weight = aux_loss_weight
 
         weights = torch.ones(10)
-        weights[-1] = class_imbalance_weight # Last class gets lower weight since it appears more often
+        weights[-1] = class_imbalance_weight
         weights = weights * (len(weights) / weights.sum())
 
         self.ce_loss = nn.CrossEntropyLoss(
@@ -553,18 +539,64 @@ class HungarianMatchingLoss(nn.Module):
 
         # Compute classification cost matrix
         out_prob = outputs.softmax(-1)  # [batch_size, num_queries, num_classes]
-        # Convert target one-hot to class indices
         tgt_ids = targets.argmax(-1)  # [batch_size, num_queries]
 
-        # Compute cost matrix for all pairs of predictions and targets
-        cost_class = -out_prob[:, :, tgt_ids.view(-1)].view(bs, num_queries, -1)
+        indices = []
+        # Process each batch independently
+        for b in range(bs):
+            # Compute cost matrix for current
+            # Create cost matrix showing how well each prediction matches each target
+            cost_matrix = -out_prob[b][:, tgt_ids[b]]  # [num_queries, num_queries]
+            cost_matrix = self.cost_class * cost_matrix.cpu().numpy()
 
-        # Final cost matrix
-        C = self.cost_class * cost_class
+            # Run Hungarian algorithm
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        sizes = [num_queries] * bs
-        indices = [linear_sum_assignment(c[i].cpu()) for i, c in enumerate(C.split(sizes, -1))]
-        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+            # Convert to tensors and move to correct device
+            row_ind = torch.as_tensor(row_ind, dtype=torch.int64, device=outputs.device) # Which queries to use
+            col_ind = torch.as_tensor(col_ind, dtype=torch.int64, device=outputs.device) # Which targets they match to
+            indices.append((row_ind, col_ind))
+            """
+            tgt_ids[b]
+            Out[1]: tensor([1, 1, 1, 1, 9], device='cuda:0')
+            Example how it works:
+            [[-0.1645718 , -0.1645718 , -0.1645718 , -0.1645718 , -0.07412154],  # Query 0
+             [-0.14723456, -0.14723456, -0.14723456, -0.14723456, -0.08399412],  # Query 1
+             [-0.16388056, -0.16388056, -0.16388056, -0.16388056, -0.05493092],  # Query 2
+             [-0.1868437 , -0.1868437 , -0.1868437 , -0.1868437 , -0.07625321],  # Query 3
+             [-0.20076165, -0.20076165, -0.20076165, -0.20076165, -0.0671524 ]]  # Query 4
+            row_ind = [0, 1, 2, 3, 4]  # Which queries to use
+            col_ind = [0, 4, 2, 3, 1]  # Which targets they match to
+            This means:
+                
+                Query 0 matches with target 0 (class 1)
+                Query 1 matches with target 4 (class 9)
+                Query 2 matches with target 2 (class 1)
+                Query 3 matches with target 3 (class 1)
+                Query 4 matches with target 1 (class 1)
+            Another Example which is easier:
+            Ground truth labels tgt_ids[b] = [8, 0, 9, 1, 8] (5 targets)
+            # Cost Matrix:
+            [[-0.0751, -0.1023, -0.0876, -0.2142, -0.0751],  # Query 0
+             [-0.0911, -0.0929, -0.0980, -0.2144, -0.0911],  # Query 1
+             [-0.0606, -0.0813, -0.1075, -0.2602, -0.0606],  # Query 2
+             [-0.0867, -0.1077, -0.1456, -0.1916, -0.0867],  # Query 3
+             [-0.0803, -0.1265, -0.1192, -0.1970, -0.0803]]  # Query 4
+            
+                IMPORTANT:
+                This cost matrix was created by selecting probabilities from out_prob based on tgt_ids:
+
+                Column 0: probabilities for class 8 (first target)
+                Column 1: probabilities for class 0 (second target)
+                Column 2: probabilities for class 9 (third target)
+                Column 3: probabilities for class 1 (fourth target)
+                Column 4: probabilities for class 8 (fifth target)
+                
+                row_ind = [0, 1, 2, 3, 4]    # Predictions to use
+                col_ind = [4, 0, 3, 2, 1]    # Which targets they match to
+            """
+
+        return indices
 
     def _get_layer_loss(self, pred, target, indices):
         """Helper to compute loss for a single layer's predictions"""
@@ -587,18 +619,19 @@ class HungarianMatchingLoss(nn.Module):
         if outputs.dim() == 4:  # Has auxiliary outputs [num_layers + 1, B, num_queries, num_classes]
             # Split predictions from different decoder layers
             aux_outputs = outputs[:-1]  # Predictions from intermediate layers
-            outputs = outputs[-1]  # Predictions from final layer
+            outputs_final = outputs[-1]  # Predictions from final layer
 
-            # Calculate loss for final predictions
-            indices = self.Hungarian_matching(outputs, targets)
-            final_loss = self._get_layer_loss(outputs, targets, indices)
+            # Calculate matching using only the final layer predictions
+            indices = self.Hungarian_matching(outputs_final, targets)
 
-            # Calculate auxiliary losses
+            # Calculate loss for final predictions using final layer matching
+            final_loss = self._get_layer_loss(outputs_final, targets, indices)
+
+            # Calculate auxiliary losses using the SAME indices from final layer
             aux_losses = []
             for aux_output in aux_outputs:
-                # For each layer, compute matching and loss
-                aux_indices = self.Hungarian_matching(aux_output, targets)
-                layer_loss = self._get_layer_loss(aux_output, targets, aux_indices)
+                # Use the same matching indices for all auxiliary layers
+                layer_loss = self._get_layer_loss(aux_output, targets, indices)
                 aux_losses.append(layer_loss)
 
             # Combine losses
@@ -613,72 +646,30 @@ class HungarianMatchingLoss(nn.Module):
 
 
 
+    # result = run_joint_detr(X_train, y_train_loc, y_train_act,
+    #                         X_test, y_test_loc, y_test_act,
+    #                         var_repeat)
 
 
+class JointActLocDataset(Dataset):
+    def __init__(self, CSI, y_act, y_loc):
+        self.X = CSI
+        self.y_loc = y_loc
+        self.y_act = y_act
 
-#         Hungarian Matching Loss for multi-user activity recognition
-#         Args:
-#             cost_class: Relative weight of classification loss
-#         """
-#         super().__init__()
-#         self.cost_class = cost_class
-#         self.ce_loss = nn.CrossEntropyLoss(label_smoothing=0.1)
-#
-#     @torch.no_grad()
-#     def Hungarian_matching(self, outputs, targets):
-#         """
-#         Performs the matching between predictions and ground truth
-#
-#         Args:
-#             outputs: Tensor of shape (batch_size, num_queries, num_classes)
-#             targets: Tensor of shape (batch_size, num_queries, num_classes)
-#
-#         Returns:
-#             A list of size batch_size, containing tuples of (index_i, index_j) where:
-#                 - index_i is the indices of the selected predictions (in order)
-#                 - index_j is the indices of the corresponding selected targets (in order)
-#         """
-#         bs, num_queries = outputs.shape[:2]
-#
-#         # Compute classification cost matrix
-#         out_prob = outputs.softmax(-1)  # [batch_size, num_queries, num_classes]
-#         # Convert target one-hot to class indices
-#         tgt_ids = targets.argmax(-1)  # [batch_size, num_queries]
-#
-#         # Compute cost matrix for all pairs of predictions and targets
-#         cost_class = -out_prob[:, :, tgt_ids.view(-1)].view(bs, num_queries, -1)
-#
-#         # Final cost matrix
-#         C = self.cost_class * cost_class
-#
-#         sizes = [num_queries] * bs
-#         indices = [linear_sum_assignment(c[i].cpu()) for i, c in enumerate(C.split(sizes, -1))]
-#         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
-#
-#     def forward(self, outputs, targets):
-#         """
-#         Args:
-#             outputs: Tensor of shape (batch_size, num_queries, num_classes)
-#             targets: Tensor of shape (batch_size, num_queries, num_classes)
-#         """
-#         indices = self.Hungarian_matching(outputs, targets)
-#
-#         # Compute the classification loss
-#         losses = []
-#         for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
-#             pred = outputs[batch_idx][pred_idx]
-#             tgt = targets[batch_idx][tgt_idx]
-#             loss = self.ce_loss(pred, tgt.argmax(-1))
-#             losses.append(loss.mean())
-#
-#         return torch.stack(losses).mean()
-#
-##
-def run_that_decoder(data_train_x,
-                       data_train_y,
-                       data_test_x,
-                       data_test_y,
-                       var_repeat=10):
+    def __len__(self)  -> int :
+        return self.X.shape[0]
+    def __getitem__(self, idx) -> tuple:
+        return self.X[idx], self.y_act[idx], self.y_loc[idx]
+
+
+def run_joint_detr(data_train_x,
+                    data_train_y_loc,
+                    data_train_y_act,
+                    data_test_x,
+                    data_test_y_loc,
+                    data_test_y_act,
+                     var_repeat=10):
     """
     [description]
     : run WiFi-based model THAT_ENCODER_DECODER
@@ -699,21 +690,21 @@ def run_that_decoder(data_train_x,
     ## ============================================ Preprocess ============================================
     #
     ##
-    data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
-                                                                            test_size = 0.5,
-                                                                            shuffle = True,
-                                                                            random_state = 39)
+    (data_valid_x, data_test_x,
+     data_valid_y_loc, data_test_y_loc,
+     data_valid_y_act, data_test_y_act) = my_train_test_split(data_test_x, data_test_y_loc, data_test_y_act, test_size=0.5, random_state=103)
+
 
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     ## shape for model
-    var_x_shape, var_y_shape = data_train_x[0].shape, [data_train_y[0].shape[1]]
+    var_x_shape, var_y_shape = data_train_x[0].shape, [data_train_y_loc[0].shape[1]]
     #
-    data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
-    # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
-    data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
+    data_train_set = JointActLocDataset(data_train_x, data_train_y_act, data_train_y_loc)
+
+    data_valid_set = JointActLocDataset(data_valid_x, data_valid_y_act, data_valid_y_loc)
 
     #
     ##
@@ -727,7 +718,7 @@ def run_that_decoder(data_train_x,
     result_f1_score = []
 
     #
-    var_macs, var_params = get_model_complexity_info(THAT_ENCODER(var_x_shape, var_y_shape),
+    var_macs, var_params = get_model_complexity_info(DETR_MultiUserJoint(var_x_shape, var_y_shape),
                                                      var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -738,25 +729,49 @@ def run_that_decoder(data_train_x,
         #
         ##
         var_mode = "multi_head"
-
+        name_run = "Empty"
+        if preset["pretrained_path"]:
+            name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
+        else:
+            pretrained_state = "NPT"
+            name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
-        name_run = f"DecOnly_THAT_{var_r}_" + "_".join(preset["data"]["environment"])
         run = wandb.init(
-            project="final_results",
-            name= name_run,
+            project="JointDETR",
+            name= name_run + "very_small",
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
         )
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(var_x_shape, var_y_shape, temp_cross=preset["nn"]["cross_attention_temp"],
-                                    num_queries=preset["nn"]["num_obj_queries"]).to(device)
-        #
-        optimizer = torch.optim.Adam(model_detr.parameters(),
-                                     lr=preset["nn"]["lr"],
-                                     weight_decay=preset["nn"]["weight_decay"])
-        #
+        model_detr = DETR_MultiUserJoint(var_x_shape,
+                                         var_y_shape,
+                                         num_decoder_layers=preset["nn"]["num_decoder_layers"],
+                                         temp_cross=preset["nn"]["cross_attention_temp"],
+                                         num_queries=preset["nn"]["num_obj_queries"],
+                                         dim_feedforward=preset["nn"]["dim_FFN"]).to(device)
+        # wandb.watch(
+        #     model_detr.feature_extractor,  # Directly target the CNN backbone
+        #     log="all",  # Log gradients and parameters
+        #     log_freq=50,  # Frequency of logging
+        #     log_graph=True  # Optional: visualize computation graph
+        # )
+
+        if preset.get("pretrained_path"):
+            model_detr, param_groups = load_model_components(
+                model_detr,
+                preset["pretrained_path"],
+                preset["nn"]["lr"],
+                preset.get("transfer_scenario"),
+                device
+            )
+            optimizer = torch.optim.Adam(param_groups)
+        else:
+            optimizer = torch.optim.Adam(model_detr.parameters(),
+                                         lr=preset["nn"]["lr"],
+                                         weight_decay=preset["nn"]["weight_decay"])
+
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
             aux_loss_weight=preset["nn"]["loss"]["aux_loss_weight"],
@@ -777,9 +792,14 @@ def run_that_decoder(data_train_x,
                                 var_epochs=preset["nn"]["epoch"],
                                 device=device,
                                 var_mode=var_mode)
+        # Save model components based on scenario
+        if preset.get("save_model"):
+            save_model_components(preset, model_detr)
         #
         var_time_1 = time.time()
         #
+
+
         ## ---------------------------------------- Test ------------------------------------------
         #
         model_detr.load_state_dict(var_best_weight)
@@ -854,3 +874,4 @@ def run_that_decoder(data_train_x,
     print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
     wandb.finish()
     return dict_true_acc
+

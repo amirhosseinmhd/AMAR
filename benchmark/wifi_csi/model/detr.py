@@ -1,6 +1,6 @@
 """
 [file]          detr.py
-[description]   implement and evaluate WiFi-based model THAT_ENCODER
+[description]   implement and evaluate WiFi-based model Transformer_Encoder
                 https://github.com/windofshadow/THAT
 """
 #
@@ -176,7 +176,7 @@ class Encoder(torch.nn.Module):
 #
 ##
 ## ------------------------------------------------------------------------------------------ ##
-## ---------------------------------------- THAT_ENCODER -------------------------------------------- ##
+## ---------------------------------------- Transformer_Encoder -------------------------------------------- ##
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
@@ -251,12 +251,11 @@ class NonLocalBlock(nn.Module):
 
 # Backbone Network
 class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=270, reduced_channels=128):
+    def __init__(self, input_channels=270, output_channels=270,embedding_time_dim=100, reduced_channels=128):
         super(CNNFeatureExtractor, self).__init__()
-        # Linear embedding to reduce channel dimensionality
-        self.embedding = nn.Linear(input_channels, reduced_channels)
+        self.embedding_time_dim = embedding_time_dim
         # Initial depthwise separable convolution
-        self.initial_conv = DepthwiseSeparableConv(reduced_channels, output_channels, kernel_size=7, padding=3)
+        self.initial_conv = DepthwiseSeparableConv(input_channels, output_channels, kernel_size=7, padding=3)
         # Max pooling to reduce temporal dimension
         self.pool = nn.MaxPool1d(kernel_size=3, stride=3)
         # Dilated convolution blocks
@@ -267,132 +266,71 @@ class CNNFeatureExtractor(nn.Module):
             DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
         )
         # Channel attention mechanism
-        self.channel_attention = ChannelAttention(output_channels)
+        # self.channel_attention = ChannelAttention(output_channels)
         # Non-local block for global context modeling
-        self.non_local = NonLocalBlock(output_channels)
+        # self.non_local = NonLocalBlock(output_channels)
         # Final convolution to reduce temporal dimension to T=100
-        self.final_conv = nn.Conv1d(output_channels, output_channels, kernel_size=10, stride=10)
+        kernel_final = int(1000//embedding_time_dim)
+        self.final_conv = nn.Conv1d(output_channels, output_channels, kernel_size=kernel_final, stride=kernel_final)
+        # self.avg_pool_final = nn.AvgPool1d(60)
 
     def forward(self, x):
         # Input shape: (batch_size, 3000, 270)
-        x = self.embedding(x)  # Reduce channel dimensionality: (batch_size, 3000, reduced_channels)
         x = x.permute(0, 2, 1)  # Swap time and feature dimensions: (batch_size, reduced_channels, 3000)
         x = self.initial_conv(x)
         x = self.pool(x)  # Reduce temporal dimension: (batch_size, output_channels, 1000)
         x = self.dilated_blocks(x)  # Apply dilated convolutions
-        x = self.channel_attention(x)  # Apply channel attention
-        x = self.non_local(x)  # Apply non-local block
+        # x = self.channel_attention(x)  # Apply channel attention
+        # x = self.non_local(x)  # Apply non-local block
         x = self.final_conv(x)  # Reduce temporal dimension to T=100: (batch_size, output_channels, 100)
         x = x.permute(0, 2, 1)  # Swap back: (batch_size, 100, output_channels)
+
+        # x = self.avg_pool_final(x)
+
         return x
 
 
-class THAT_ENCODER(torch.nn.Module):
+class Transformer_Encoder(torch.nn.Module):
     #
     ##
     def __init__(self,
-                 var_x_shape,
-                 var_y_shape):
+                 var_embedding_shape,
+                 var_y_shape,
+                 num_attention_heads=2,
+                 num_transformer_encoder_layers=4):
         #
         ##
-        super(THAT_ENCODER, self).__init__()
+        super(Transformer_Encoder, self).__init__()
         #
-        var_dim_feature = var_x_shape[-1]
-        var_dim_time = var_x_shape[-2]
+        var_dim_feature = var_embedding_shape[-1]
+        var_dim_time = var_embedding_shape[-2]
         var_dim_output = var_y_shape[-1]
-        #    self.num_heads = 5
 
-        # Replace the single output layer with multiple prediction heads
-        #    self.layer_output = torch.nn.ModuleList([
-        #        torch.nn.Linear(256 + 32, var_dim_output) for _ in range(self.num_heads)
-        #   ])
+        self.layer_embedding_gaussian = Gaussian_Position(var_dim_feature, var_dim_time)  # 100 tokens for left stream
 
-        #
-        ## ---------------------------------------- left ------------------------------------------
-        #
-        # Replace pooling with CNN feature extractor
-        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_dim_feature)
 
-        # Gaussian encoding layers
-        self.layer_left_gaussian = Gaussian_Position(var_dim_feature, 100)  # 100 tokens for left stream
-        # self.layer_right_gaussian = Gaussian_Position(var_dim_feature, 50)  # 50 tokens for right stream
 
-        # Left stream encoder
+        self.layer_embedding_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_feature,
+                                                               var_num_head=num_attention_heads,
+                                                               var_size_cnn=[1])
+                                                       for _ in range(num_transformer_encoder_layers)])
+        #
+        self.layer_embedding_norm = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
 
-        var_num_left = 4
-        var_dim_left = var_dim_feature
-        self.layer_left_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_left,
-                                                               var_num_head=10,
-                                                               var_size_cnn=[1, 3, 5])
-                                                       for _ in range(var_num_left)])
-        #
-        self.layer_left_norm = torch.nn.LayerNorm(var_dim_left, eps=1e-6)
-        #
-        # self.layer_left_cnn_0 = torch.nn.Conv1d(in_channels=var_dim_left,
-        #                                         out_channels=128,
-        #                                         kernel_size=8)
-
-        # self.layer_left_cnn_1 = torch.nn.Conv1d(in_channels=var_dim_left,
-        #                                         out_channels=128,
-        #                                         kernel_size=16)
-        #
-        # self.layer_left_dropout = torch.nn.Dropout(0.5)
-        #
-        ## --------------------------------------- right ------------------------------------------
-        #
-        # torch.nn.AvgPool1d(kernel_size=20, stride=20))
-        # self.layer_left_pooling = torch.nn.AdaptiveAvgPool1d(270)
-
-        # #
-        # var_num_right = 4
-        # var_dim_right = 270
-        # self.layer_right_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_right,
-        #                                                         var_num_head=10,
-        #                                                         var_size_cnn=[1, 2, 3])
-        #                                                 for _ in range(var_num_right)])
-        # #
-        # self.layer_right_norm = torch.nn.LayerNorm(var_dim_right, eps=1e-6)
-        # #
-        # self.layer_right_cnn_0 = torch.nn.Conv1d(in_channels=var_dim_right,
-        #                                          out_channels=16,
-        #                                          kernel_size=2)
-
-        # self.layer_right_cnn_1 = torch.nn.Conv1d(in_channels=var_dim_right,
-        #                                          out_channels=16,
-        #                                          kernel_size=4)
-        # #
-        # self.layer_right_dropout = torch.nn.Dropout(0.5)
-        # #
-        # ##
-        # self.layer_leakyrelu = torch.nn.LeakyReLU()
-        #
-        ##
-        # self.layer_output = torch.nn.Linear(256 + 32, var_dim_output)
 
     #
     ##
-    def forward(self, var_left, var_right):
-        # Process through CNN feature extractor
-        # var_left, var_right = self.feature_extractor(var_input)
-
+    def forward(self, var_embedding):
         # Apply Gaussian position encoding
-        var_left = self.layer_left_gaussian(var_left)  # Output: (batch_size, 100, features)
-        # var_right = self.layer_right_gaussian(var_right)  # Output: (batch_size, 50, features)
+        var_embedding = self.layer_embedding_gaussian(var_embedding)  # Output: (batch_size, 100, features)
 
         # Process left stream through transformer encoders
-        for layer in self.layer_left_encoder:
-            var_left = layer(var_left)
-        var_left = self.layer_left_norm(var_left)
+        for layer in self.layer_embedding_encoder:
+            var_embedding = var_embedding + layer(var_embedding)
+        var_embedding = self.layer_embedding_norm(var_embedding)
 
-        # # Process right stream through transformer encoders
-        # for layer in self.layer_right_encoder:
-        #     var_right = layer(var_right)
-        # var_right = self.layer_right_norm(var_right)
 
-        # Concatenate the streams
-        # var_t = torch.concat([var_left, var_right], dim=1)  # Output: (batch_size, 150, features)
-
-        return var_left
+        return var_embedding
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
@@ -401,7 +339,7 @@ class TransformerDecoder(nn.Module):
         self.d_model = d_model
         self.nhead = nhead
 
-        # Create object queries - learnable parameters
+        # Create activity queries - learnable parameters
         self.query_embed = nn.Parameter(torch.randn(num_queries, d_model))  # 10 object queries
 
         # Create decoder layers
@@ -418,23 +356,23 @@ class TransformerDecoder(nn.Module):
 
         self.norm = nn.LayerNorm(d_model)
 
-        # Output projection for classification and box prediction
-        # Assuming num_classes is the number of activity classes
-
-        # Create auxiliary outputs for each decoder layer + final output
+        # Output projection for classification
+        # Assuming 10 is the number of activity classes
         self.class_embed = nn.Linear(d_model, 10)
+
+        self.tgt_embed = nn.Parameter(torch.zeros(num_queries, d_model))
 
     def forward(self, memory):
         """
         Args:
-            memory: Output from encoder (B, 420, 270)
+            memory: Output from encoder (B, T, 270)
         Returns:
             outputs: List of output predictions from each decoder layer
         """
         B = memory.shape[0]
 
         # Initialize decoder input with zero queries
-        tgt = torch.zeros_like(self.query_embed.unsqueeze(0).expand(B, -1, -1))
+        tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
         # Get positional queries
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
@@ -469,9 +407,10 @@ class TransformerDecoderLayer(nn.Module):
         # Cross attention
         self.cross_attn = TemperatureMultiheadAttention(d_model, nhead, dropout=dropout,
                                                         temperature=temp_cross_attention, batch_first=True)
+        # self.cross_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
-
+        self.cross_attn_weights = None
         # Feed forward
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
@@ -487,17 +426,16 @@ class TransformerDecoderLayer(nn.Module):
 
     def forward(self, tgt, memory, query_pos=None):
         # Self attention
-        q = k = self.with_pos_embed(tgt, None)
-        tgt2 = self.self_attn(q, k, tgt)[0]
-        tgt = tgt + self.dropout1(tgt2)
-        tgt = self.norm1(tgt)
-
+        # q = k = self.with_pos_embed(tgt, None)
+        # tgt2 = self.self_attn(q, k, tgt)[0]
+        # tgt = tgt + self.dropout1(tgt2)
+        # tgt = self.norm1(tgt)
         # Cross attention
-        tgt2 = self.cross_attn(
-            query=self.with_pos_embed(tgt, query_pos),
-            key=memory,
-            value=memory
-        )[0]
+        tgt2, self.cross_attn_weights = self.cross_attn(
+            tgt + query_pos,
+            memory,
+            memory
+        )
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
 
@@ -513,6 +451,7 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
     def __init__(self, embed_dim, num_heads, temperature=2.0, **kwargs):
         super().__init__(embed_dim, num_heads, **kwargs)
         self.temperature = temperature
+        self.attention_weights = None  # Store attention weights
 
     def forward(self, query, key, value, key_padding_mask=None,
                 need_weights=True, attn_mask=None, average_attn_weights=True):
@@ -520,9 +459,9 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
         attn_output, attn_weights = super().forward(
             query, key, value,
             key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
+            need_weights=True,  # Always compute weights
             attn_mask=attn_mask,
-            average_attn_weights=average_attn_weights
+            average_attn_weights=True # gets the average across all heads
         )
 
         # Apply temperature scaling to attention output
@@ -532,15 +471,16 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 
 class DETR_MultiUser(nn.Module):
-    def __init__(self, var_x_shape, var_y_shape, num_decoder_layers=12, temp_cross=1, num_queries=5, dim_feedforward=1024):
+    def __init__(self, var_x_shape, var_y_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024):
         super().__init__()
-        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1])
-        # Encoder (your existing THAT_ENCODER)
-        self.encoder = THAT_ENCODER(var_x_shape, var_y_shape)
-        # Decoder
+        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        var_embedding_shape = (embedding_time_dim, features_dim)
+        self.encoder = Transformer_Encoder(var_embedding_shape, var_y_shape, num_attention_heads=n_attention_heads,
+                                           num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
-            d_model=270,  # Matches encoder output feature dimension
-            nhead=6,
+            d_model=features_dim,  # Matches encoder output feature dimension
+            nhead=n_attention_heads,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
@@ -550,10 +490,10 @@ class DETR_MultiUser(nn.Module):
 
     def forward(self, x):
         # Extracting Features
-        var_left = self.feature_extractor(x)
-        # Getting the memory to query from!
-        var_right = None
-        memory = self.encoder(var_left, var_right)  # Shape: (B, 420, 270)
+        var_embedding = self.feature_extractor(x)
+
+
+        memory = self.encoder(var_embedding)  # Shape: (B, 420, 270)
 
         # Pass through decoder to get predictions from all layers
         outputs_class = self.decoder(memory)  # Shape: [num_layers + 1, B, num_queries, num_classes]
@@ -706,7 +646,7 @@ def run_that_detr(data_train_x,
                      var_repeat=10):
     """
     [description]
-    : run WiFi-based model THAT_ENCODER_DECODER
+    : run WiFi-based model Transformer_Encoder_DECODER
     [parameter]
     : data_train_x: numpy array, CSI amplitude to train model
     : data_train_y: numpy array, labels to train model
@@ -752,7 +692,14 @@ def run_that_detr(data_train_x,
     result_f1_score = []
 
     #
-    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape, var_y_shape),
+    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape, var_y_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
+                                    features_dim=preset["nn"]["d_embedding"],
+                                    embedding_time_dim=preset["nn"]["token_length"],
+                                    num_decoder_layers=preset["nn"]["num_decoder_layers"],
+                                    temp_cross=preset["nn"]["cross_attention_temp"],
+                                    num_queries=preset["nn"]["num_obj_queries"],
+                                    dim_feedforward=preset["nn"]["dim_FFN"]),
                                                      var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -771,21 +718,28 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="TimeStreamOnly_Final",
-            name= name_run,
+            project="embedding_attention",
+            name= name_run + "very_small",
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
         )
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(var_x_shape,
-                                    var_y_shape,
+        model_detr = DETR_MultiUser(var_x_shape, var_y_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
+                                    features_dim=preset["nn"]["d_embedding"],
+                                    embedding_time_dim=preset["nn"]["token_length"],
                                     num_decoder_layers=preset["nn"]["num_decoder_layers"],
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"]).to(device)
-
+        # wandb.watch(
+        #     model_detr.feature_extractor,  # Directly target the CNN backbone
+        #     log="all",  # Log gradients and parameters
+        #     log_freq=50,  # Frequency of logging
+        #     log_graph=True  # Optional: visualize computation graph
+        # )
 
         if preset.get("pretrained_path"):
             model_detr, param_groups = load_model_components(
