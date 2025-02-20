@@ -8,7 +8,7 @@
 #SBATCH --job-name=csi_job
 #SBATCH --output=timeStream-%j.out
 
-export OUTFILE_NAME="timeStream-${SLURM_JOB_ID}"
+export OUTFILE_NAME="timeStream_decoder_-${SLURM_JOB_ID}"
 
 # Define important directories
 PROJECT_DIR=/home/amirmhd/projects/def-hinat/amirmhd/multi_modal_CSI
@@ -39,9 +39,15 @@ echo "Python version: $(python --version)"
 
 # Update your data paths in the Python script to use SLURM_TMPDIR
 # export DATA_PATH=$SLURM_TMPDIR/$DATA_DIR
-export AUX_LOSS=0.5
+# export AUX_LOSS=0.5
 # export NUM_QUERIES=5
+# export ENVIRONMENTS_EXP=classroom
+# export NUM_DECODER_LAYERS=6
 
+export WANDB_NAME_= _T_2
+export TEMP_CROSS_ATTENTION = 2
+
+# export MODEL_TYPE=THAT_COUNT
 # Now we change the preset accordingly
 python config_modifier.py preset.py modified_preset.py
 # just to verify:
