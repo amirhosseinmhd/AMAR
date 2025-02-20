@@ -251,43 +251,45 @@ class NonLocalBlock(nn.Module):
 
 # Backbone Network
 class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=270,embedding_time_dim=100, reduced_channels=128):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=100):
         super(CNNFeatureExtractor, self).__init__()
         self.embedding_time_dim = embedding_time_dim
-        # Initial depthwise separable convolution
-        self.initial_conv = DepthwiseSeparableConv(input_channels, output_channels, kernel_size=7, padding=3)
-        # Max pooling to reduce temporal dimension
-        self.pool = nn.MaxPool1d(kernel_size=3, stride=3)
-        # Dilated convolution blocks
+
+        # Gradual channel reduction with efficient operations
+        self.channel_reduction = nn.Sequential(
+            nn.Conv1d(input_channels, 128, kernel_size=1),
+            nn.ReLU(),
+            DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
+            nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
+            nn.Conv1d(128, 64, kernel_size=1),
+            nn.ReLU(),
+            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
+            nn.Conv1d(64, 32, kernel_size=1),
+            nn.ReLU(),
+            DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
+            nn.Conv1d(32, output_channels, kernel_size=1),
+            nn.ReLU(),
+        )
+
+        # Dilated convolution blocks maintain temporal resolution
         self.dilated_blocks = nn.Sequential(
             DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
         )
-        # Channel attention mechanism
-        # self.channel_attention = ChannelAttention(output_channels)
-        # Non-local block for global context modeling
-        # self.non_local = NonLocalBlock(output_channels)
-        # Final convolution to reduce temporal dimension to T=100
-        kernel_final = int(1000//embedding_time_dim)
-        self.final_conv = nn.Conv1d(output_channels, output_channels, kernel_size=kernel_final, stride=kernel_final)
-        # self.avg_pool_final = nn.AvgPool1d(60)
+
+        # Final temporal reduction
+        kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
+        self.final_conv = nn.Conv1d(output_channels, output_channels,
+                                  kernel_size=kernel_final, stride=kernel_final)
 
     def forward(self, x):
-        # Input shape: (batch_size, 3000, 270)
-        x = x.permute(0, 2, 1)  # Swap time and feature dimensions: (batch_size, reduced_channels, 3000)
-        x = self.initial_conv(x)
-        x = self.pool(x)  # Reduce temporal dimension: (batch_size, output_channels, 1000)
-        x = self.dilated_blocks(x)  # Apply dilated convolutions
-        # x = self.channel_attention(x)  # Apply channel attention
-        # x = self.non_local(x)  # Apply non-local block
-        x = self.final_conv(x)  # Reduce temporal dimension to T=100: (batch_size, output_channels, 100)
-        x = x.permute(0, 2, 1)  # Swap back: (batch_size, 100, output_channels)
-
-        # x = self.avg_pool_final(x)
-
-        return x
+        x = x.permute(0, 2, 1)  # (batch, channels, time)
+        x = self.channel_reduction(x)
+        x = self.dilated_blocks(x)
+        x = self.final_conv(x)
+        return x.permute(0, 2, 1)  # (batch, time, channels)
 
 
 class Transformer_Encoder(torch.nn.Module):
