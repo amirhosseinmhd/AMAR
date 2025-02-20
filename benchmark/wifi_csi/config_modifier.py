@@ -35,9 +35,12 @@ def update_config_from_env(config):
         config['nn']['loss']['class_imbalance_weight'] = float(os.environ['CLASS_IMBALANCE_WEIGHT'])
     if "LABEL_SMOOTHING" in os.environ:
         config['nn']['loss']['label_smoothing'] = float(os.environ['LABEL_SMOOTHING'])
-
+    if "TEMP_CROSS_ATTENTION" in os.environ:
+        config['nn']['cross_attention_temp'] = float(os.environ['TEMP_CROSS_ATTENTION'])
     if 'MODEL_TYPE' in os.environ:
         config['model'] = os.environ['MODEL_TYPE']
+    if 'WANDB_NAME_' in os.environ:
+        config['wandb_name'] = str(os.environ['WANDB_NAME_']).strip()
 
     if 'ENVIRONMENTS_EXP' in os.environ:
         # Split by comma and strip whitespace
