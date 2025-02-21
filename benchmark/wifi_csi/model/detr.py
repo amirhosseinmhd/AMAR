@@ -264,11 +264,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.Conv1d(128, 64, kernel_size=1),
             nn.ReLU(),
             DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
-            nn.Conv1d(64, 32, kernel_size=1),
-            nn.ReLU(),
-            DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
-            nn.Conv1d(32, output_channels, kernel_size=1),
-            nn.ReLU(),
+            nn.Conv1d(64, output_channels, kernel_size=1),
+            nn.ReLU()
+            # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
+            # nn.Conv1d(32, output_channels, kernel_size=1),
+            # nn.ReLU(),
         )
 
         # Dilated convolution blocks maintain temporal resolution
