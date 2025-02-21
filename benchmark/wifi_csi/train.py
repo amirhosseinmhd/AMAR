@@ -122,7 +122,7 @@ def train(model: Module,
 
             dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
             # Log attention weights every N batches
-        if var_epoch % 10 == 0:
+        if preset["model"] == "DETR"  and var_epoch % 10 == 0:
             log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
 
 
