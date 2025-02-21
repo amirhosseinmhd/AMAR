@@ -261,11 +261,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
             nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
-            nn.Conv1d(128, 64, kernel_size=1),
+            nn.Conv1d(128, output_channels, kernel_size=1),
             nn.ReLU(),
-            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
-            nn.Conv1d(64, output_channels, kernel_size=1),
-            nn.ReLU()
+            # DepthwiseSeparableConv(output_channels, output_channels, kernel_size=5, padding=2),
+            # nn.Conv1d(64, output_channels, kernel_size=1),
+            # nn.ReLU()
             # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
             # nn.Conv1d(32, output_channels, kernel_size=1),
             # nn.ReLU(),
@@ -691,6 +691,7 @@ def run_that_detr(data_train_x,
     result_precision = []
     result_recall = []
     result_f1_score = []
+    result_avg_count_error = []
 
     #
     var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape, var_y_shape,
@@ -834,6 +835,7 @@ def run_that_detr(data_train_x,
         result_precision.append(dict_true_acc['precision'])
         result_recall.append(dict_true_acc['recall'])
         result_f1_score.append(dict_true_acc['f1_score'])
+        result_avg_count_error.append(dict_true_acc['mean_count_error'])
 
     wandb.log({
         "avg_accuracy": sum(result_ppp) / len(result_ppp),
@@ -843,6 +845,7 @@ def run_that_detr(data_train_x,
         "avg_precision": sum(result_precision) / len(result_precision),
         "avg_recall": sum(result_recall) / len(result_recall),
         "avg_f1_score": sum(result_f1_score) / len(result_f1_score),
+        "avg_count_error": sum(result_avg_count_error) / len(result_avg_count_error),
     })
     viz_stats = visualize_model_performance(
         y_pred=predict_test_y,
