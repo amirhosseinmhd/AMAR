@@ -427,11 +427,6 @@ class TransformerDecoderLayer(nn.Module):
         return tensor if pos is None else tensor + pos
 
     def forward(self, tgt, memory, query_pos=None):
-        # Self attention
-        # q = k = self.with_pos_embed(tgt, None)
-        # tgt2 = self.self_attn(q, k, tgt)[0]
-        # tgt = tgt + self.dropout1(tgt2)
-        # tgt = self.norm1(tgt)
         # Cross attention
         tgt2, self.cross_attn_weights = self.cross_attn(
             tgt + query_pos,
@@ -440,7 +435,11 @@ class TransformerDecoderLayer(nn.Module):
         )
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
-
+        # Self attention
+        q = k = self.with_pos_embed(tgt, None)
+        tgt2 = self.self_attn(q, k, tgt)[0]
+        tgt = tgt + self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
         # Feed forward
         tgt2 = self.ffn(tgt)
         tgt = tgt + self.dropout3(tgt2)
