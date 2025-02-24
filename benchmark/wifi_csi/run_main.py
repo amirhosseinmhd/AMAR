@@ -43,6 +43,9 @@ def master_splitter(preset, var_task, var_model, var_users):
         elif var_model == "THAT_COUNT_CONSTRAINED":
             y_red = reduce_dataset(y)
             y = y_red.sum(axis=1)
+        elif var_model == "CROWD_COUNTING_THAT":
+            y = y.sum(axis = (1, 2)) # we except one number for each value of y which corresponds to count of people!
+
         else:
             pass
 
