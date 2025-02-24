@@ -139,6 +139,8 @@ def run():
 
     elif var_model == "DETR": run_model = run_that_detr
 
+    elif var_model == "CROWD_COUNTING_THAT": run_model = run_crowd_counting_THAT
+
     else:
         raise Exception("Not valid name for model")
 
