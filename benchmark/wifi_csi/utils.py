@@ -212,10 +212,12 @@ def calculate_scores(y_true, y_pred):
 
 def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103):
     m = X.shape[0]
-    random_indicies = np.random.shuffle(np.arange(0, m), random_state=random_state)
-    m_train = m * (1 - test_size)
-    indices_train = random_indicies[0:m_train]
-    indices_test = random_indicies[m_train:]
+    rng = np.random.RandomState(random_state)
+    random_indices = np.arange(0, m)
+    rng.shuffle(random_indices)
+    m_train = int(m * (1 - test_size))
+    indices_train = random_indices[0:m_train]
+    indices_test = random_indices[m_train:]
     X_train = X[indices_train]
     X_test = X[indices_test]
     y_train_loc = y_location_n[indices_train]
@@ -224,7 +226,77 @@ def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_sta
     y_test_act = y_activity_n [indices_test]
 
     return X_train, X_test, y_train_loc, y_test_loc, y_train_act, y_test_act
-def performance_metrics(y_true, y_pred, var_mode="multi_head", var_threshold=0.5):
+def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
+    # Ensure inputs are numpy arrays
+    y_true_act = np.array(y_true_act)
+    y_pred_act = np.array(y_pred_act)
+    y_true_loc = np.array(y_true_loc)
+    y_pred_loc = np.array(y_pred_loc)
+    last_act_pred = y_pred_act[-1]
+    last_loc_pred = y_pred_loc[-1]
+    batch_size, num_heads, num_classes_act = last_act_pred.shape
+    num_classes_loc = last_loc_pred.shape[-1]
+
+
+    ## Creating predicted indicies in order to convert it to one hot encoded
+    y_pred_indices_act = np.argmax(last_act_pred, axis=-1)
+    y_pred_indices_loc = np.argmax(last_loc_pred, axis=-1)
+    last_act_pred = np.eye(num_classes_act)[y_pred_indices_act]
+    last_loc_pred = np.eye(num_classes_loc)[y_pred_indices_loc] #
+    ##
+
+    last_loc_pred[y_pred_indices_act == 9] = np.zeros(num_classes_loc)
+    last_loc_pred = last_loc_pred.sum(axis=1)
+    last_act_pred = last_act_pred.sum(axis=1)
+
+    y_true_loc = y_true_loc.sum(axis=1)
+    y_true_act = y_true_act.sum(axis=1)
+
+    # Metrics for activity prediction
+    act_metrics = calculate_performance_metrics(y_true_act, last_act_pred, batch_size)
+
+    # Metrics for location prediction
+    loc_metrics = calculate_performance_metrics(y_true_loc, last_loc_pred, batch_size)
+
+    return act_metrics, loc_metrics
+
+def calculate_performance_metrics(y_true, y_pred, batch_size):
+        # Calculate the absolute difference
+        absolute_diff = np.abs(y_true - y_pred)
+
+        # Find perfect predictions
+        perfect_prediction_mask = np.all(absolute_diff == 0, axis=1)
+        perfect_predictions = np.sum(perfect_prediction_mask)
+        perfect_prediction_percentage = (perfect_predictions / batch_size) * 100
+
+        # Calculate total error
+        total_error = np.sum(absolute_diff) / batch_size
+
+        # Calculate error per person
+        error_per_person = error_per_number_person(y_pred, y_true)
+
+        # Calculate counting error per person
+        counting_error_perPerson = count_error(y_pred, y_true)
+        mean_count_error = counting_error_perPerson.mean()
+
+        # Calculate precision, recall, f1-score and accuracy
+        precision_, recall_, f1_score_, acc = calculate_scores(y_true, y_pred)
+
+        return {
+            'total_error': total_error,
+            'perfect_prediction_percentage': perfect_prediction_percentage,
+            'accuracy': acc,
+            'error_per_person': error_per_person,
+            'mean_count_error': mean_count_error,
+            'counting_error_perPerson': counting_error_perPerson,
+            'precision': precision_,
+            'recall': recall_,
+            'f1_score': f1_score_
+        }
+
+
+
+def performance_metrics(y_true, y_pred, var_mode="joint_multihead", var_threshold=0.5):
     # Ensure inputs are numpy arrays
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)

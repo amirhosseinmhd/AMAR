@@ -18,7 +18,7 @@ from ptflops import get_model_complexity_info
 from itertools import permutations
 from sklearn.metrics import classification_report, accuracy_score
 from scipy.optimize import linear_sum_assignment
-from train import train
+from train_joint import train
 from preset import preset
 import torch.nn.functional as F
 from utils import *
@@ -178,7 +178,7 @@ class Encoder(torch.nn.Module):
 #
 ##
 ## ------------------------------------------------------------------------------------------ ##
-## ---------------------------------------- THAT_ENCODER -------------------------------------------- ##
+## ---------------------------------------- Transformer_Encoder -------------------------------------------- ##
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
@@ -253,85 +253,86 @@ class NonLocalBlock(nn.Module):
 
 # Backbone Network
 class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=270, reduced_channels=128):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=100):
         super(CNNFeatureExtractor, self).__init__()
-        # Linear embedding to reduce channel dimensionality
-        # self.embedding = nn.Linear(input_channels, reduced_channels)
-        # Initial depthwise separable convolution
-        self.initial_conv = DepthwiseSeparableConv(input_channels, output_channels, kernel_size=7, padding=3)
-        # Max pooling to reduce temporal dimension
-        self.pool = nn.MaxPool1d(kernel_size=3, stride=3)
-        # Dilated convolution blocks
+        self.embedding_time_dim = embedding_time_dim
+
+        # Gradual channel reduction with efficient operations
+        self.channel_reduction = nn.Sequential(
+            nn.Conv1d(input_channels, 128, kernel_size=1),
+            nn.ReLU(),
+            DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
+            nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
+            nn.Conv1d(128, output_channels, kernel_size=1),
+            nn.ReLU(),
+            # DepthwiseSeparableConv(output_channels, output_channels, kernel_size=5, padding=2),
+            # nn.Conv1d(64, output_channels, kernel_size=1),
+            # nn.ReLU()
+            # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
+            # nn.Conv1d(32, output_channels, kernel_size=1),
+            # nn.ReLU(),
+        )
+
+        # Dilated convolution blocks maintain temporal resolution
         self.dilated_blocks = nn.Sequential(
             DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
             DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
         )
-        # Channel attention mechanism
-        # self.channel_attention = ChannelAttention(output_channels)
-        # Non-local block for global context modeling
-        # self.non_local = NonLocalBlock(output_channels)
-        # Final convolution to reduce temporal dimension to T=100
-        self.final_conv = nn.Conv1d(output_channels, output_channels, kernel_size=20, stride=20)
+
+        # Final temporal reduction
+        kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
+        self.final_conv = nn.Conv1d(output_channels, output_channels,
+                                  kernel_size=kernel_final, stride=kernel_final)
 
     def forward(self, x):
-        # Input shape: (batch_size, 3000, 270)
-        # x = self.embedding(x)  # Reduce channel dimensionality: (batch_size, 3000, reduced_channels)
-        x = x.permute(0, 2, 1)  # Swap time and feature dimensions: (batch_size, reduced_channels, 3000)
-        x = self.initial_conv(x)
-        x = self.pool(x)  # Reduce temporal dimension: (batch_size, output_channels, 1000)
-        x = self.dilated_blocks(x)  # Apply dilated convolutions
-        # x = self.channel_attention(x)  # Apply channel attention
-        # x = self.non_local(x)  # Apply non-local block
-        x = self.final_conv(x)  # Reduce temporal dimension to T=100: (batch_size, output_channels, 100)
-        x = x.permute(0, 2, 1)  # Swap back: (batch_size, 100, output_channels)
-        return x
+        x = x.permute(0, 2, 1)  # (batch, channels, time)
+        x = self.channel_reduction(x)
+        x = self.dilated_blocks(x)
+        x = self.final_conv(x)
+        return x.permute(0, 2, 1)  # (batch, time, channels)
 
 
-class THAT_ENCODER(torch.nn.Module):
+class Transformer_Encoder(torch.nn.Module):
     #
     ##
     def __init__(self,
-                 var_x_shape,
-                 var_y_shape):
+                 var_embedding_shape,
+                 num_attention_heads=2,
+                 num_transformer_encoder_layers=4):
         #
         ##
-        super(THAT_ENCODER, self).__init__()
+        super(Transformer_Encoder, self).__init__()
         #
-        var_dim_feature = var_x_shape[-1]
-        var_dim_time = var_x_shape[-2]
-        var_dim_output = var_y_shape[-1]
+        var_dim_feature = var_embedding_shape[-1]
+        var_dim_time = var_embedding_shape[-2]
 
-        self.layer_left_gaussian = Gaussian_Position(var_dim_feature, 50)  # 100 tokens for left stream
+        self.layer_embedding_gaussian = Gaussian_Position(var_dim_feature, var_dim_time)  # 100 tokens for left stream
 
 
-        var_num_left = 4
-        var_dim_left = var_dim_feature
-        self.layer_left_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_left,
-                                                               var_num_head=10,
+
+        self.layer_embedding_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_feature,
+                                                               var_num_head=num_attention_heads,
                                                                var_size_cnn=[1])
-                                                       for _ in range(var_num_left)])
+                                                       for _ in range(num_transformer_encoder_layers)])
         #
-        self.layer_left_norm = torch.nn.LayerNorm(var_dim_left, eps=1e-6)
+        self.layer_embedding_norm = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
 
 
     #
     ##
-    def forward(self, var_left, var_right):
-        # Process through CNN feature extractor
-        # var_left, var_right = self.feature_extractor(var_input)
-
+    def forward(self, var_embedding):
         # Apply Gaussian position encoding
-        var_left = self.layer_left_gaussian(var_left)  # Output: (batch_size, 100, features)
+        var_embedding = self.layer_embedding_gaussian(var_embedding)  # Output: (batch_size, 100, features)
 
         # Process left stream through transformer encoders
-        for layer in self.layer_left_encoder:
-            var_left = var_left + layer(var_left)
-        var_left = self.layer_left_norm(var_left)
+        for layer in self.layer_embedding_encoder:
+            var_embedding = var_embedding + layer(var_embedding)
+        var_embedding = self.layer_embedding_norm(var_embedding)
 
 
-        return var_left
+        return var_embedding
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
@@ -340,7 +341,7 @@ class TransformerDecoder(nn.Module):
         self.d_model = d_model
         self.nhead = nhead
 
-        # Create object queries - learnable parameters
+        # Create activity queries - learnable parameters
         self.query_embed = nn.Parameter(torch.randn(num_queries, d_model))  # 10 object queries
 
         # Create decoder layers
@@ -357,24 +358,30 @@ class TransformerDecoder(nn.Module):
 
         self.norm = nn.LayerNorm(d_model)
 
-        # Output projection for classification and box prediction
-        # Assuming num_classes is the number of activity classes
-
-        # Create auxiliary outputs for each decoder layer + final output
+        # Output projection for classification
+        # Assuming 10 is the number of activity classes
         self.class_embed = nn.Linear(d_model, 10)
+
+        """
+        Num locations can be changed to 2 or 5. If the num locaitons be 2, then we are solving the problem as regression probelm
+        Regression makes more sense but harder problem to solve. The classification task is easier yet less informative. Locations might be close together and we would like the model understand the
+        structure of the environment.
+        
+        """
         self.location_embed = nn.Linear(d_model, num_locations)
+        self.tgt_embed = nn.Parameter(torch.zeros(num_queries, d_model))
 
     def forward(self, memory):
         """
         Args:
-            memory: Output from encoder (B, 420, 270)
+            memory: Output from encoder (B, T, 270)
         Returns:
             outputs: List of output predictions from each decoder layer
         """
         B = memory.shape[0]
 
         # Initialize decoder input with zero queries
-        tgt = torch.zeros_like(self.query_embed.unsqueeze(0).expand(B, -1, -1))
+        tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
         # Get positional queries
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
@@ -417,7 +424,7 @@ class TransformerDecoderLayer(nn.Module):
                                                         temperature=temp_cross_attention, batch_first=True)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
-
+        self.cross_attn_weights = None
         # Feed forward
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
@@ -432,21 +439,19 @@ class TransformerDecoderLayer(nn.Module):
         return tensor if pos is None else tensor + pos
 
     def forward(self, tgt, memory, query_pos=None):
+        # Cross attention
+        tgt2, self.cross_attn_weights = self.cross_attn(
+            tgt + query_pos,
+            memory,
+            memory
+        )
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
         # Self attention
         q = k = self.with_pos_embed(tgt, None)
         tgt2 = self.self_attn(q, k, tgt)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
-
-        # Cross attention
-        tgt2 = self.cross_attn(
-            query=self.with_pos_embed(tgt, query_pos),
-            key=memory,
-            value=memory
-        )[0]
-        tgt = tgt + self.dropout2(tgt2)
-        tgt = self.norm2(tgt)
-
         # Feed forward
         tgt2 = self.ffn(tgt)
         tgt = tgt + self.dropout3(tgt2)
@@ -459,6 +464,7 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
     def __init__(self, embed_dim, num_heads, temperature=2.0, **kwargs):
         super().__init__(embed_dim, num_heads, **kwargs)
         self.temperature = temperature
+        self.attention_weights = None  # Store attention weights
 
     def forward(self, query, key, value, key_padding_mask=None,
                 need_weights=True, attn_mask=None, average_attn_weights=True):
@@ -466,9 +472,9 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
         attn_output, attn_weights = super().forward(
             query, key, value,
             key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
+            need_weights=True,  # Always compute weights
             attn_mask=attn_mask,
-            average_attn_weights=average_attn_weights
+            average_attn_weights=True # gets the average across all heads
         )
 
         # Apply temperature scaling to attention output
@@ -477,29 +483,29 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
         return attn_output, attn_weights
 
 
-class DETR_MultiUserJoint(nn.Module):
-    def __init__(self, var_x_shape, var_y_shape, num_decoder_layers=12, temp_cross=1, num_queries=5, dim_feedforward=1024):
+class DETR_MultiUser_JointActivity(nn.Module):
+    def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, output_dim = 5):
         super().__init__()
-        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1])
-        # Encoder (your existing THAT_ENCODER)
-        self.encoder = THAT_ENCODER(var_x_shape, var_y_shape)
-        # Decoder
+        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        var_embedding_shape = (embedding_time_dim, features_dim)
+        self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
+                                           num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
-            d_model=270,  # Matches encoder output feature dimension
-            nhead=6,
+            d_model=features_dim,  # Matches encoder output feature dimension
+            nhead=n_attention_heads,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
             num_queries=num_queries,
-            temp_cross_attention=temp_cross
+            temp_cross_attention=temp_cross,
+            num_locations=output_dim
         )
 
     def forward(self, x):
         # Extracting Features
-        var_left = self.feature_extractor(x)
-        # Getting the memory to query from!
-        var_right = None
-        memory = self.encoder(var_left, var_right)  # Shape: (B, 420, 270)
+        var_embedding = self.feature_extractor(x)
+        memory = self.encoder(var_embedding)  # Shape: (B, 420, 270)
 
         # Pass through decoder to get predictions from all layers
         outputs_class_all = self.decoder(memory)  # We expect a tuple here,  Shape: ( [num_layers, B, num_queries, num_classes], shape_locations)
@@ -508,10 +514,9 @@ class DETR_MultiUserJoint(nn.Module):
 
 
 class HungarianMatchingLoss(nn.Module):
-
-    def __init__(self, cost_class_weight, aux_loss_weight, label_smoothing, class_imbalance_weight):
+    def __init__(self, cost_class_weight, alfa, aux_loss_weight, label_smoothing, class_imbalance_weight):
         super().__init__()
-        self.cost_class = cost_class_weight
+        # self.cost_class = cost_class_weight
         self.aux_loss_weight = aux_loss_weight
 
         weights = torch.ones(10)
@@ -523,38 +528,80 @@ class HungarianMatchingLoss(nn.Module):
             label_smoothing=label_smoothing
         )
 
+        self.ce_loss_loc = nn.CrossEntropyLoss()
+        self.MSE_Loss = nn.MSELoss()
+        self.alfa = alfa
+
     @torch.no_grad()
-    def Hungarian_matching(self, outputs, targets):
+    def Hungarian_matching(self, act_pred, act_target, loc_pred, loc_target):
         """
         Performs the matching between predictions and ground truth
         Args:
-            outputs: Tensor of shape (batch_size, num_queries, num_classes)
-            targets: Tensor of shape (batch_size, num_queries, num_classes)
+            act_pred: Tensor of shape (batch_size, num_queries, num_classes)
+            act_target: Tensor of shape (batch_size, num_queries, num_classes)
+            loc_pred: Tensor of shape (batch_size, num_queries, 2) - x,y coordinates
+            loc_target: Tensor of shape (batch_size, num_queries, 2) - x,y coordinates
         Returns:
             A list of size batch_size, containing tuples of (index_i, index_j) where:
                 - index_i is the indices of the selected predictions (in order)
                 - index_j is the indices of the corresponding selected targets (in order)
         """
-        bs, num_queries = outputs.shape[:2]
+        bs, num_queries = act_pred.shape[:2]
 
         # Compute classification cost matrix
-        out_prob = outputs.softmax(-1)  # [batch_size, num_queries, num_classes]
-        tgt_ids = targets.argmax(-1)  # [batch_size, num_queries]
-
+        out_prob = act_pred.softmax(-1)  # [batch_size, num_queries, num_classes]
+        tgt_ids = act_target.argmax(-1)  # [batch_size, num_queries]
+        flag_classification = 1 if loc_pred[0, 0].shape[0] > 2 else 0
+        loc_prob = loc_pred.softmax(-1)  # [batch_size, num_queries, num_classes]
+        loc_tgt_ids = loc_target.argmax(-1)  # [batch_size, num_queries]
         indices = []
         # Process each batch independently
         for b in range(bs):
-            # Compute cost matrix for current
+            # Compute activity cost matrix for current batch
             # Create cost matrix showing how well each prediction matches each target
-            cost_matrix = -out_prob[b][:, tgt_ids[b]]  # [num_queries, num_queries]
-            cost_matrix = self.cost_class * cost_matrix.cpu().numpy()
+            activity_cost = -out_prob[b][:, tgt_ids[b]]
+
+            if flag_classification:
+                location_cost = torch.zeros((num_queries, num_queries), device=act_pred.device)
+                for i in range(num_queries):
+                    for j in range(num_queries):
+                        flag_valid_location = loc_target[b, j].sum()
+                        if not flag_valid_location:
+                            location_cost[i, j] = 0
+                        else:
+                            # Use negative probability for the correct class as the cost
+                            location_cost[i, j] = -loc_prob[b, i, loc_tgt_ids[b, j]]
+
+            else:
+                # Compute location cost matrix using MSE
+                location_cost = torch.zeros((num_queries, num_queries), device=act_pred.device)
+                for i in range(num_queries):
+                    for j in range(num_queries):
+                        flag_valid_location = loc_target[b, j].sum()
+                        if not flag_valid_location:
+                            location_cost[i, j] = 0
+                        else:
+
+                        # Calculate MSE between predicted and target locations
+
+                            location_cost[i, j] = torch.sum((loc_pred[b, i] - loc_target[b, j]) ** 2)
+
+            # Normalize location costs to be in similar scale as activity costs
+            if location_cost.max() > 0:
+                location_cost = location_cost / location_cost.max()
+
+            # Combine costs using alpha weighting
+            combined_cost = (1 - self.alfa) * activity_cost + self.alfa * location_cost
+
+            combined_cost = combined_cost.cpu().numpy()
+
 
             # Run Hungarian algorithm
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            row_ind, col_ind = linear_sum_assignment(combined_cost)
 
             # Convert to tensors and move to correct device
-            row_ind = torch.as_tensor(row_ind, dtype=torch.int64, device=outputs.device) # Which queries to use
-            col_ind = torch.as_tensor(col_ind, dtype=torch.int64, device=outputs.device) # Which targets they match to
+            row_ind = torch.as_tensor(row_ind, dtype=torch.int64, device=act_pred.device)  # Which queries to use
+            col_ind = torch.as_tensor(col_ind, dtype=torch.int64, device=act_pred.device)  # Which targets they match to
             indices.append((row_ind, col_ind))
             """
             tgt_ids[b]
@@ -568,7 +615,7 @@ class HungarianMatchingLoss(nn.Module):
             row_ind = [0, 1, 2, 3, 4]  # Which queries to use
             col_ind = [0, 4, 2, 3, 1]  # Which targets they match to
             This means:
-                
+
                 Query 0 matches with target 0 (class 1)
                 Query 1 matches with target 4 (class 9)
                 Query 2 matches with target 2 (class 1)
@@ -582,7 +629,7 @@ class HungarianMatchingLoss(nn.Module):
              [-0.0606, -0.0813, -0.1075, -0.2602, -0.0606],  # Query 2
              [-0.0867, -0.1077, -0.1456, -0.1916, -0.0867],  # Query 3
              [-0.0803, -0.1265, -0.1192, -0.1970, -0.0803]]  # Query 4
-            
+
                 IMPORTANT:
                 This cost matrix was created by selecting probabilities from out_prob based on tgt_ids:
 
@@ -591,24 +638,61 @@ class HungarianMatchingLoss(nn.Module):
                 Column 2: probabilities for class 9 (third target)
                 Column 3: probabilities for class 1 (fourth target)
                 Column 4: probabilities for class 8 (fifth target)
-                
+
                 row_ind = [0, 1, 2, 3, 4]    # Predictions to use
                 col_ind = [4, 0, 3, 2, 1]    # Which targets they match to
             """
 
         return indices
 
-    def _get_layer_loss(self, pred, target, indices):
+
+    def _get_layer_loss(self, pred_activity, target_activity, pred_location, target_location, indices):
         """Helper to compute loss for a single layer's predictions"""
         losses = []
+        flag_classification = 1 if pred_location[0, 0].shape[0] > 2 else 0
+
         for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
-            pred_i = pred[batch_idx][pred_idx]
-            tgt_i = target[batch_idx][tgt_idx]
-            loss = self.ce_loss(pred_i, tgt_i.argmax(-1))
-            losses.append(loss.mean())
+            pred_i_act = pred_activity[batch_idx][pred_idx]
+            tgt_i_act = target_activity[batch_idx][tgt_idx]
+
+            pred_i_loc = pred_location[batch_idx][pred_idx]
+            tgt_i_loc = target_location[batch_idx][tgt_idx]
+
+            loss_activity = self.ce_loss(pred_i_act, tgt_i_act.argmax(-1))
+            ######
+            # Check if location is valid (non-zero)
+            valid_locations = []
+            for i, target_loc in enumerate(tgt_i_loc):
+                # If location sum is zero, mask it out
+                if target_loc.sum() == 0:
+                    valid_locations.append(False)
+                else:
+                    valid_locations.append(True)
+
+            valid_locations = torch.tensor(valid_locations, device=pred_i_loc.device)
+
+            # If there are valid locations, calculate location loss
+            if valid_locations.any():
+                # Extract only valid locations for loss calculation
+                valid_pred_loc = pred_i_loc[valid_locations]
+                valid_tgt_loc = tgt_i_loc[valid_locations]
+
+                # Calculate location loss only for valid locations
+
+                if flag_classification:
+                    loss_location = self.ce_loss_loc(valid_pred_loc, valid_tgt_loc)
+                else:
+                    loss_location = self.MSE_Loss(valid_pred_loc, valid_tgt_loc)
+            else:
+                # No valid locations, set location loss to zero
+                loss_location = torch.tensor(0.0, device=loss_activity.device)
+            ########
+            joint_loss = ( 1 - self.alfa) * loss_activity + self.alfa * loss_location
+
+            losses.append(joint_loss)
         return torch.stack(losses).mean()
 
-    def forward(self, outputs, targets):
+    def forward(self, act_pred, act_target, loc_pred, loc_target):
         """
         Args:
             outputs: If auxiliary losses enabled: Tensor of shape [num_layers + 1, B, num_queries, num_classes]
@@ -616,39 +700,29 @@ class HungarianMatchingLoss(nn.Module):
             targets: Tensor of shape [B, num_queries, num_classes]
         """
         # Check if we have auxiliary outputs
-        if outputs.dim() == 4:  # Has auxiliary outputs [num_layers + 1, B, num_queries, num_classes]
+        if act_pred.dim() == 4:  # Has auxiliary outputs [num_layers + 1, B, num_queries, num_classes]
             # Split predictions from different decoder layers
-            aux_outputs = outputs[:-1]  # Predictions from intermediate layers
-            outputs_final = outputs[-1]  # Predictions from final layer
-
-            # Calculate matching using only the final layer predictions
-            indices = self.Hungarian_matching(outputs_final, targets)
+            aux_act_pred = act_pred[:-1]  # Predictions from intermediate layers
+            act_pred_final = act_pred[-1]  # Predictions from final layer
+            aux_loc_pred = loc_pred[:-1]  # Predictions from intermediate layers
+            loc_pred_final = loc_pred[-1]  # Predictions from final layer
+            indices = self.Hungarian_matching(act_pred_final, act_target, loc_pred_final, loc_target)
 
             # Calculate loss for final predictions using final layer matching
-            final_loss = self._get_layer_loss(outputs_final, targets, indices)
+            final_loss = self._get_layer_loss( act_pred_final, act_target, loc_pred_final, loc_target, indices)
 
-            # Calculate auxiliary losses using the SAME indices from final layer
             aux_losses = []
-            for aux_output in aux_outputs:
-                # Use the same matching indices for all auxiliary layers
-                layer_loss = self._get_layer_loss(aux_output, targets, indices)
+            for layer_idx, (layer_act_pred, layer_loc_pred) in enumerate(zip(aux_act_pred, aux_loc_pred)):
+                layer_loss = self._get_layer_loss(layer_act_pred, act_target, layer_loc_pred, loc_target, indices)
                 aux_losses.append(layer_loss)
 
-            # Combine losses
-            aux_loss = torch.stack(aux_losses).mean() if aux_losses else torch.tensor(0.0)
-            total_loss = final_loss + self.aux_loss_weight * aux_loss
-
+                # Combine all losses with weights
+                aux_loss = torch.stack(aux_losses).mean()
+                total_loss = final_loss + self.aux_loss_weight * aux_loss
             return total_loss
+        else:
+            raise ValueError("Dim Loss not expected")
 
-        else:  # No auxiliary outputs, just compute regular loss
-            indices = self.Hungarian_matching(outputs, targets)
-            return self._get_layer_loss(outputs, targets, indices)
-
-
-
-    # result = run_joint_detr(X_train, y_train_loc, y_train_act,
-    #                         X_test, y_test_loc, y_test_act,
-    #                         var_repeat)
 
 
 class JointActLocDataset(Dataset):
@@ -700,7 +774,7 @@ def run_joint_detr(data_train_x,
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     ## shape for model
-    var_x_shape, var_y_shape = data_train_x[0].shape, [data_train_y_loc[0].shape[1]]
+    var_x_shape, var_y_shape_loc, var_y_shape_act = data_train_x[0].shape, data_train_y_loc.shape[1:], data_train_y_act.shape[1:]
     #
     data_train_set = JointActLocDataset(data_train_x, data_train_y_act, data_train_y_loc)
 
@@ -709,17 +783,36 @@ def run_joint_detr(data_train_x,
     #
     ##
     ## ========================================= Train & Evaluate =========================================
-    result_ppp = []
+    result_ppp_act = []
+    result_total_error_act = []
+    result_precision_act = []
+    result_recall_act = []
+    result_f1_score_act = []
+    result_avg_count_error_act = []
+
+    # Store location results
+    result_ppp_loc = []
+    result_total_error_loc = []
+    result_precision_loc = []
+    result_recall_loc = []
+    result_f1_score_loc = []
+    result_avg_count_error_loc = []
+
+    # Store timing results
     result_time_train = []
     result_time_test = []
-    result_total_error = []
-    result_precision = []
-    result_recall = []
-    result_f1_score = []
 
     #
-    var_macs, var_params = get_model_complexity_info(DETR_MultiUserJoint(var_x_shape, var_y_shape),
-                                                     var_x_shape, as_strings=False)
+    var_macs, var_params = get_model_complexity_info(DETR_MultiUser_JointActivity(var_x_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
+                                    features_dim=preset["nn"]["d_embedding"],
+                                    embedding_time_dim=preset["nn"]["token_length"],
+                                    num_decoder_layers=preset["nn"]["num_decoder_layers"],
+                                    temp_cross=preset["nn"]["cross_attention_temp"],
+                                    num_queries=preset["nn"]["num_obj_queries"],
+                                    dim_feedforward=preset["nn"]["dim_FFN"],
+                                    output_dim=var_y_shape_loc[-1]),
+                                    var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -744,13 +837,16 @@ def run_joint_detr(data_train_x,
         )
         #
         torch.random.manual_seed(var_r + 39)
-        #
-        model_detr = DETR_MultiUserJoint(var_x_shape,
-                                         var_y_shape,
-                                         num_decoder_layers=preset["nn"]["num_decoder_layers"],
-                                         temp_cross=preset["nn"]["cross_attention_temp"],
-                                         num_queries=preset["nn"]["num_obj_queries"],
-                                         dim_feedforward=preset["nn"]["dim_FFN"]).to(device)
+        ################ CHANGE HERE,
+        model_detr = DETR_MultiUser_JointActivity(var_x_shape,
+                                    n_attention_heads=preset["nn"]["n_attention_heads"],
+                                    features_dim=preset["nn"]["d_embedding"],
+                                    embedding_time_dim=preset["nn"]["token_length"],
+                                    num_decoder_layers=preset["nn"]["num_decoder_layers"],
+                                    temp_cross=preset["nn"]["cross_attention_temp"],
+                                    num_queries=preset["nn"]["num_obj_queries"],
+                                    dim_feedforward=preset["nn"]["dim_FFN"],
+                                                  output_dim= var_y_shape_loc[-1]).to(device)
         # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
@@ -774,6 +870,7 @@ def run_joint_detr(data_train_x,
 
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
+            alfa=0.1,
             aux_loss_weight=preset["nn"]["loss"]["aux_loss_weight"],
             label_smoothing=preset["nn"]["loss"]["label_smoothing"],
             class_imbalance_weight=preset["nn"]["loss"]["class_imbalance_weight"]
@@ -805,10 +902,12 @@ def run_joint_detr(data_train_x,
         model_detr.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_detr(torch.from_numpy(data_test_x).to(device))
+            predict_test_y_act, predict_test_y_loc = model_detr(torch.from_numpy(data_test_x).to(device))
         #
         # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
-        predict_test_y = predict_test_y.detach().cpu().numpy()
+        predict_test_act = predict_test_y_act.detach().cpu().numpy()
+        predict_test_loc = predict_test_y_loc.detach().cpu().numpy()
+
         #
         var_time_2 = time.time()
         #
@@ -816,62 +915,89 @@ def run_joint_detr(data_train_x,
         #
         ##
 
-        # data_test_y_c = data_test_y.sum(axis=1)
-        dict_true_acc = performance_metrics(data_test_y, predict_test_y, var_mode=var_mode)
+        dict_true_acc_act, dict_true_acc_loc = performance_metrics_joint( data_test_y_act, predict_test_act, data_test_y_loc, predict_test_loc)
+
         wandb.log({
             "repeat": var_r,
             "train_time": var_time_1 - var_time_0,
             "test_time": var_time_2 - var_time_1,
-            "TOTAL_TESTSET_ERROR": dict_true_acc['total_error'],
-            "TOTAL_TESTSET_perfect_prediction_percentage": dict_true_acc['perfect_prediction_percentage'],
-            "TOTAL_ACCURACY": dict_true_acc['accuracy'],
-            "mean_count_error": dict_true_acc['mean_count_error'],
-            "error_per_person_1": dict_true_acc['error_per_person'][0],
-            "error_per_person_2": dict_true_acc['error_per_person'][1],
-            "error_per_person_3": dict_true_acc['error_per_person'][2],
-            "error_per_person_4": dict_true_acc['error_per_person'][3],
-            "error_per_person_5": dict_true_acc['error_per_person'][4],
-            "precision": dict_true_acc['precision'],
-            "recall": dict_true_acc['recall'],
-            "f1_score": dict_true_acc['f1_score']
+
+            # Activity metrics
+            "ACT_TOTAL_TESTSET_ERROR": dict_true_acc_act['total_error'],
+            "ACT_TOTAL_TESTSET_perfect_prediction_percentage": dict_true_acc_act['perfect_prediction_percentage'],
+            "ACT_TOTAL_ACCURACY": dict_true_acc_act['accuracy'],
+            "ACT_mean_count_error": dict_true_acc_act['mean_count_error'],
+            "ACT_error_per_person_1": dict_true_acc_act['error_per_person'][0],
+            "ACT_error_per_person_2": dict_true_acc_act['error_per_person'][1],
+            "ACT_error_per_person_3": dict_true_acc_act['error_per_person'][2],
+            "ACT_error_per_person_4": dict_true_acc_act['error_per_person'][3],
+            "ACT_error_per_person_5": dict_true_acc_act['error_per_person'][4],
+            "ACT_precision": dict_true_acc_act['precision'],
+            "ACT_recall": dict_true_acc_act['recall'],
+            "ACT_f1_score": dict_true_acc_act['f1_score'],
+
+            # Location metrics
+            "LOC_TOTAL_TESTSET_ERROR": dict_true_acc_loc['total_error'],
+            "LOC_TOTAL_TESTSET_perfect_prediction_percentage": dict_true_acc_loc['perfect_prediction_percentage'],
+            "LOC_TOTAL_ACCURACY": dict_true_acc_loc['accuracy'],
+            "LOC_mean_count_error": dict_true_acc_loc['mean_count_error'],
+            "LOC_error_per_person_1": dict_true_acc_loc['error_per_person'][0],
+            "LOC_error_per_person_2": dict_true_acc_loc['error_per_person'][1],
+            "LOC_error_per_person_3": dict_true_acc_loc['error_per_person'][2],
+            "LOC_error_per_person_4": dict_true_acc_loc['error_per_person'][3],
+            "LOC_error_per_person_5": dict_true_acc_loc['error_per_person'][4],
+            "LOC_precision": dict_true_acc_loc['precision'],
+            "LOC_recall": dict_true_acc_loc['recall'],
+            "LOC_f1_score": dict_true_acc_loc['f1_score']
         })
-        print(" %.6fs" % (time.time() - var_time_1),
-              "- Total Error %.6f" % dict_true_acc['total_error'],
-              "-  perfect_prediction_percentage %.6f" % dict_true_acc['perfect_prediction_percentage'],
-              )
         #
         #
 
         #
-        result_ppp.append(dict_true_acc['perfect_prediction_percentage'])
-        result_time_train.append(var_time_1 - var_time_0)
-        result_time_test.append(var_time_2 - var_time_1)
-        result_total_error.append(dict_true_acc['total_error'])
-        result_precision.append(dict_true_acc['precision'])
-        result_recall.append(dict_true_acc['recall'])
-        result_f1_score.append(dict_true_acc['f1_score'])
+        result_ppp_act.append(dict_true_acc_act['perfect_prediction_percentage'])
+        result_total_error_act.append(dict_true_acc_act['total_error'])
+        result_precision_act.append(dict_true_acc_act['precision'])
+        result_recall_act.append(dict_true_acc_act['recall'])
+        result_f1_score_act.append(dict_true_acc_act['f1_score'])
+        result_avg_count_error_act.append(dict_true_acc_act['mean_count_error'])
+
+        result_ppp_loc.append(dict_true_acc_loc['perfect_prediction_percentage'])
+        result_total_error_loc.append(dict_true_acc_loc['total_error'])
+        result_precision_loc.append(dict_true_acc_loc['precision'])
+        result_recall_loc.append(dict_true_acc_loc['recall'])
+        result_f1_score_loc.append(dict_true_acc_loc['f1_score'])
+        result_avg_count_error_loc.append(dict_true_acc_loc['mean_count_error'])
 
     wandb.log({
-        "avg_accuracy": sum(result_ppp) / len(result_ppp),
-        "avg_train_time": sum(result_time_train) / len(result_time_train),
-        "avg_test_time": sum(result_time_test) / len(result_time_test),
-        "avg_total_error": sum(result_total_error) / len(result_total_error),
-        "avg_precision": sum(result_precision) / len(result_precision),
-        "avg_recall": sum(result_recall) / len(result_recall),
-        "avg_f1_score": sum(result_f1_score) / len(result_f1_score),
+        # Activity averages
+        "ACT_avg_accuracy": sum(result_ppp_act) / len(result_ppp_act),
+        "ACT_avg_total_error": sum(result_total_error_act) / len(result_total_error_act),
+        "ACT_avg_precision": sum(result_precision_act) / len(result_precision_act),
+        "ACT_avg_recall": sum(result_recall_act) / len(result_recall_act),
+        "ACT_avg_f1_score": sum(result_f1_score_act) / len(result_f1_score_act),
+        "ACT_avg_count_error": sum(result_avg_count_error_act) / len(result_avg_count_error_act),
+
+        # Location averages
+        "LOC_avg_accuracy": sum(result_ppp_loc) / len(result_ppp_loc),
+        "LOC_avg_total_error": sum(result_total_error_loc) / len(result_total_error_loc),
+        "LOC_avg_precision": sum(result_precision_loc) / len(result_precision_loc),
+        "LOC_avg_recall": sum(result_recall_loc) / len(result_recall_loc),
+        "LOC_avg_f1_score": sum(result_f1_score_loc) / len(result_f1_score_loc),
+        "LOC_avg_count_error": sum(result_avg_count_error_loc) / len(result_avg_count_error_loc),
     })
-    viz_stats = visualize_model_performance(
-        y_pred=predict_test_y,
-        y_true=data_test_y,
-        var_mode=var_mode,
-        save_dir=f'./visualizations/experiment_{var_r}_{var_mode}'
-    )
-    print("\nDetailed Performance Analysis:")
-    print(f"Mean Error: {viz_stats['mean_error']:.4f} ± {viz_stats['error_std']:.4f}")
-    print("\nClass-wise Mean Absolute Error:")
-    for i, error in enumerate(viz_stats['class_wise_mae']):
-        print(f"Class {i}: {error:.4f}")
-    print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
+
+    # viz_stats = visualize_model_performance(
+    #     y_pred=predict_test_y,
+    #     y_true=data_test_y_act,
+    #     var_mode=var_mode,
+    #     save_dir=f'./visualizations/experiment_{var_r}_{var_mode}'
+    # )
+    # print("\nDetailed Performance Analysis:")
+    # print(f"Mean Error: {viz_stats['mean_error']:.4f} ± {viz_stats['error_std']:.4f}")
+    # print("\nClass-wise Mean Absolute Error:")
+    # for i, error in enumerate(viz_stats['class_wise_mae']):
+    #     print(f"Class {i}: {error:.4f}")
+    # print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
     wandb.finish()
-    return dict_true_acc
+    return dict_true_acc_act, dict_true_acc_loc
 
