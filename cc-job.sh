@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=30:30:0
+#SBATCH --time=12:30:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
@@ -48,11 +48,12 @@ echo "Python version: $(python --version)"
 # export ENVIRONMENTS_EXP=classroom
 # export NUM_DECODER_LAYERS=6
 
-export TOKEN_LENGTH=100
-export EMBEDDING_DIM=10
-export NUM_ATTENTION_HEAD=4
-
-# export MODEL_TYPE=THAT_COUNT
+# export TOKEN_LENGTH=100
+export EMBEDDING_DIM=16
+export LABEL_SMOOTHING=0.2 
+export LEARNING_RATE=0.0007
+export WANDB_NAME_=T200_d16_SM02
+# export MODEL_TYPE=THAT_COUNT 
 # Now we change the preset accordingly
 python config_modifier.py preset.py modified_preset.py
 # just to verify:
@@ -68,4 +69,4 @@ if [ -d "results" ]; then
     cp -r results $PROJECT_DIR/$OUTFILE_NAME
 fi
 
-echo "Job finished at $(date)"
+echo "Job finished at $(date)"  

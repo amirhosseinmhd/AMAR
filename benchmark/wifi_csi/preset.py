@@ -20,8 +20,8 @@ preset = {
     "repeat": 8,
     ## path of data
     "path": {
-        "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",               # directory of CSI amplitude files
-        "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",             # path of annotation file
+        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/multi_modal_CSI/dataset/wifi_csi/amp",               # directory of CSI amplitude files
+        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/multi_modal_CSI/dataset/annotation.csv",             # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #

@@ -18,3 +18,8 @@ wandb/
 
 result/
 __pycache__/
+dataset/wifi_csi/.DS_Store
+benchmark/wifi_csi/results/model_0/PT_classroom_empty_room.pth
+benchmark/wifi_csi/results/model_0/PT_meeting_room_empty_room.pth
+results/model_0/PT_classroom_empty_room.pth
+results/model_0/PT_meeting_room_empty_room.pth
