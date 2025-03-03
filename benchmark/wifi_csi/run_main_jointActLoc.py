@@ -80,21 +80,22 @@ def run():
      y_train_act, y_test_act) = my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103)
 
 
-    result = run_joint_detr(X_train, y_train_loc, y_train_act,
+    result_act, result_loc = run_joint_detr(X_train, y_train_loc, y_train_act,
                             X_test, y_test_loc, y_test_act,
                             var_repeat)
     #
     ##
-    result["model"] = var_model
-    result["task"] = var_task
-    result["data"] = preset["data"]
-    result["nn"] = preset["nn"]
-    #
-    print(result)
-    #
-    ## save results
-    var_file = open(preset["path"]["save"], 'w')
-    json.dump(result, var_file, indent=4, cls=NumpyEncoder)
+    # result["model"] = var_model
+    # result["task"] = var_task
+    # result["data"] = preset["data"]
+    # result["nn"] = preset["nn"]
+    # #
+    print(result_act)
+    print(result_loc)
+    # #
+    # ## save results
+    # var_file = open(preset["path"]["save"], 'w')
+    # json.dump(result, var_file, indent=4, cls=NumpyEncoder)
 
 #
 ##

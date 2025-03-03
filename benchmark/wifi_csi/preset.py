@@ -8,7 +8,7 @@ import os
 preset = {
     #
     ## define model
-    "wandb_name": "DETR",
+    "wandb_name": "JOINT_DETR",
     "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR
@@ -42,8 +42,8 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 5e-4,                                     # learning rate
-        "epoch": 300,                                   # number of epochs
+        "lr": 6e-4,                                     # learning rate
+        "epoch": 1,                                   # number of epochs
         "batch_size": 16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -56,7 +56,7 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.1,  # label smoothing factor
+            "label_smoothing": 0.3,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
@@ -65,7 +65,7 @@ preset = {
         "num_decoder_layers": 5,
         "dim_FFN": 512,
         "token_length": 200,
-        "d_embedding": 16,
+        "d_embedding": 32,
         "n_attention_heads": 2
     },
     ## encoding of activities and locations
@@ -81,13 +81,14 @@ preset = {
             "pick_up":  [0, 0, 0, 0, 0, 0, 1, 0, 0],
             "sit_down": [0, 0, 0, 0, 0, 0, 0, 1, 0],
             "stand_up": [0, 0, 0, 0, 0, 0, 0, 0, 1],
-        },        # "location": {
+        },
+        # "location": {
         #     "nan": [0, 0],  # Default origin point
-        #     "a": [0.80, 4.45],  # Location A coordinates
-        #     "b": [0.80, 2.30],  # Location B coordinates
-        #     "c": [3.60, 4.45],  # Location C coordinates
-        #     "d": [3.60, 1.90],  # Location D coordinates
-        #     "e": [8.30, 4.45],  # Location E coordinates
+        #     "a": [3.700, 2.65],  # Location A coordinates
+        #     "b": [3.700, 6.250],  # Location B coordinates
+        #     "c": [2.500, 4.450],  # Location C coordinates
+        #     "d": [1.400, 2.650],  # Location D coordinates
+        #     "e": [1.400, 6.250],  # Location E coordinates
         # }
         "location": {                                   # encoding of different locations
             "nan":  [0, 0, 0, 0, 0],

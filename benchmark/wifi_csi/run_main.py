@@ -43,6 +43,9 @@ def master_splitter(preset, var_task, var_model, var_users):
         elif var_model == "THAT_COUNT_CONSTRAINED":
             y_red = reduce_dataset(y)
             y = y_red.sum(axis=1)
+        elif var_model == "CROWD_COUNTING_THAT":
+            y = y.sum(axis = (1, 2)) # we except one number for each value of y which corresponds to count of people!
+
         else:
             pass
 
@@ -135,6 +138,8 @@ def run():
     elif var_model == "THAT_ENCODER": run_model = run_that_decoder
 
     elif var_model == "DETR": run_model = run_that_detr
+
+    elif var_model == "CROWD_COUNTING_THAT": run_model = run_crowd_counting_THAT
 
     else:
         raise Exception("Not valid name for model")

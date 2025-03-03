@@ -297,7 +297,6 @@ class Transformer_Encoder(torch.nn.Module):
     ##
     def __init__(self,
                  var_embedding_shape,
-                 var_y_shape,
                  num_attention_heads=2,
                  num_transformer_encoder_layers=4):
         #
@@ -306,7 +305,6 @@ class Transformer_Encoder(torch.nn.Module):
         #
         var_dim_feature = var_embedding_shape[-1]
         var_dim_time = var_embedding_shape[-2]
-        var_dim_output = var_y_shape[-1]
 
         self.layer_embedding_gaussian = Gaussian_Position(var_dim_feature, var_dim_time)  # 100 tokens for left stream
 
@@ -472,12 +470,12 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 
 class DETR_MultiUser(nn.Module):
-    def __init__(self, var_x_shape, var_y_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
+    def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
                  temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024):
         super().__init__()
         self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
         var_embedding_shape = (embedding_time_dim, features_dim)
-        self.encoder = Transformer_Encoder(var_embedding_shape, var_y_shape, num_attention_heads=n_attention_heads,
+        self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
                                            num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
             d_model=features_dim,  # Matches encoder output feature dimension
@@ -694,7 +692,7 @@ def run_that_detr(data_train_x,
     result_avg_count_error = []
 
     #
-    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape, var_y_shape,
+    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -728,7 +726,7 @@ def run_that_detr(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(var_x_shape, var_y_shape,
+        model_detr = DETR_MultiUser(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],

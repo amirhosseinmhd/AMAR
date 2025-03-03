@@ -7,6 +7,14 @@
 *.jpg
 *.out
 *.json
+.idea/
+benchmark/wifi_csi/.idea/
+benchmark/wifi_csi/.ipynb_checkpoints/
+benchmark/wifi_csi/modified_preset.py
+benchmark/wifi_csi/preset.py.save
+benchmark/wifi_csi/results/
+benchmark/wifi_csi/wandb/
+wandb/
 
 result/
 __pycache__/
