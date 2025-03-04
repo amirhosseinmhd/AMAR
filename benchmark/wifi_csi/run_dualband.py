@@ -85,32 +85,13 @@ def run():
                                                              shuffle=True,
                                                              random_state=39
                                                              )
-    #
-    ## select a WiFi-based model
-    if var_model == "ST-RF": run_model = run_strf
-    #
-    elif var_model == "MLP": run_model = run_mlp
-    #
-    elif var_model == "LSTM": run_model = run_lstm
-    #
-    elif var_model == "CNN-1D": run_model = run_cnn_1d
-    #
-    elif var_model == "CNN-2D": run_model = run_cnn_2d
-    #
-    elif var_model == "CLSTM": run_model = run_cnn_lstm
-    #
-    elif var_model == "ABLSTM": run_model = run_ablstm
-    #
-    elif var_model == "THAT": run_model = run_that
-    #
-    elif var_model == "SSL": run_model = run_ssl
 
-    elif var_model == "dual_band": run_model = run_dual_band
+
 
 
     #
     ## run WiFi-based model
-    result = run_model(data_train_x_band1, data_train_y_band1,
+    result = run_dual_band(data_train_x_band1, data_train_y_band1,
                        data_test_x_band1, data_test_y_band1,
                        data_train_x_band2, data_train_y_band2,
                        data_test_x_band2, data_test_y_band2,
