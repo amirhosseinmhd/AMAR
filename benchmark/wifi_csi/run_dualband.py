@@ -60,7 +60,7 @@ def run():
 
     #
     var_label_list_band1 = data_pd_y_band1["label"].to_list()
-    var_label_list_band2 = data_pd_y_band1["label"].to_list()
+    var_label_list_band2 = data_pd_y_band2["label"].to_list()
 
     #
     ## load CSI amplitude
