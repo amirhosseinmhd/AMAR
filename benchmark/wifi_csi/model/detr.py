@@ -597,7 +597,7 @@ class HungarianMatchingLoss(nn.Module):
             pred_i = pred[batch_idx][pred_idx]
             tgt_i = target[batch_idx][tgt_idx]
             loss = self.ce_loss(pred_i, tgt_i.argmax(-1))
-            losses.append(loss.mean())
+            losses.append(loss.mean()) ### REMOVE MEAN HERE! UNNECESSARY
         return torch.stack(losses).mean()
 
     def forward(self, outputs, targets):
