@@ -388,6 +388,24 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
     # we expect to return two arrays...
     return (np.array(new_data_activity), np.array(new_data_location))
 
+def reduce_dataset_dualband(data, indicies_, num_object_queries=None):
+    new_data = []
+    zero = np.zeros((5, 1))
+
+    for (i, sample) in enumerate(data):
+        # Count non-zero rows-pp
+        legend_non_zero = sample.sum(axis=1)
+        new_sample = np.delete(sample, (legend_non_zero == 0).argmax(), axis=0)
+        new_sample = np.hstack((new_sample, zero))
+        legend_non_zero = new_sample.sum(axis=1)
+        new_sample[legend_non_zero == 0, :] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        if num_object_queries:
+            new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
+            new_sample = np.concatenate((new_sample, new_matrix))
+        index_ = indicies_[i]
+        new_data.append(new_sample[index_])
+    return np.array(new_data)
+
 
 def reduce_dataset(data, num_object_queries=None):
     new_data = []
