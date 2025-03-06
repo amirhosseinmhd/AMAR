@@ -20,23 +20,25 @@ from torch.utils.data import Dataset
 from preset import preset
 from model.detr import *
 import wandb
-
-
+from torch.optim.lr_scheduler import LambdaLR
+import math
+from utils import *
 class DualBandDETR(torch.nn.Module):
     def __init__(self, var_x_shape_band1, var_x_shape_band2, var_y_shape):
         super(DualBandDETR, self).__init__()
         
         # Feature extractors for each band
+        T_ = int(preset["nn"]["token_length"]/2)
         self.feature_extractor_band1 = CNNFeatureExtractor(
             input_channels=var_x_shape_band1[-1],
             output_channels=preset["nn"]["d_embedding"],
-            embedding_time_dim=preset["nn"]["token_length"]
+            embedding_time_dim= preset["nn"]["token_length"]
         )
         
         self.feature_extractor_band2 = CNNFeatureExtractor(
             input_channels=var_x_shape_band2[-1],
             output_channels=preset["nn"]["d_embedding"],
-            embedding_time_dim=preset["nn"]["token_length"]
+            embedding_time_dim=T_
         )
         
         # Encoders for each band
@@ -74,13 +76,20 @@ class DualBandDETR(torch.nn.Module):
         encoded_band2 = self.encoder_band2(features_band2)  # Shape: [B, token_length, d_embedding]
         
         # Concatenate encoded features along the feature dimension
-        combined_features = torch.cat((encoded_band1, encoded_band2), dim=-1)  # Shape: [B, token_length, d_embedding*2]
-        
+        combined_features = torch.cat((encoded_band2,encoded_band1), dim=1)  # Shape: [B, token_length * 2, d_embedding]
         # Decode the combined features
         outputs = self.decoder(combined_features)  # Shape: [num_layers, B, num_queries, num_classes]
         
         
         return outputs
+def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1):
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    return LambdaLR(optimizer, lr_lambda)
 def train(model: Module,
           optimizer: Optimizer,
           loss: Module,
@@ -174,7 +183,7 @@ def train(model: Module,
             dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
             
             # Log attention weights every N batches
-            if preset["model"] == "DETR" and var_epoch % 10 == 0:
+            if var_epoch % 10 == 0:
                 log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
 
         # Log metrics
@@ -335,12 +344,10 @@ def run_dual_band(data_train_x_band1, data_train_y_band1,
         var_time_2 = time.time()
 
         # Evaluate
-        data_test_y_c = data_test_y_band1.reshape(-1, data_test_y_band1.shape[-1])
-        predict_test_y_c = predict_test_y.reshape(-1, data_test_y_band1.shape[-1])
+        #
 
         # Calculate performance metrics
-        dict_true_acc = performance_metrics(data_test_y_c, predict_test_y_c, var_mode=var_mode)
-
+        dict_true_acc = performance_metrics(data_test_y_band1, predict_test_y, var_mode=var_mode)
         # Log metrics to wandb
         wandb.log({
             "repeat": var_r,

@@ -9,6 +9,7 @@ import argparse
 from sklearn.model_selection import train_test_split
 #
 from model import *
+from utils import *
 from preset import preset
 from load_data import load_data_x, load_data_y, encode_data_y
 #
@@ -67,9 +68,13 @@ def run():
     data_x_band1 = load_data_x(preset["path"]["data_x"], var_label_list_band1)
     data_x_band2 = load_data_x(preset["path"]["data_x"], var_label_list_band2)
     #
+    indices_ = np.vstack([np.random.permutation(preset["nn"]["num_obj_queries"]) for i in range(data_x_band1.shape[0])]) # insuring that we have same index for different band
     ## encode labels
     data_y = encode_data_y(data_pd_y_band1, var_task)
+    data_y = reduce_dataset_dualband(data_y,indices_, preset["nn"]["num_obj_queries"])  # CHECKKKKKKKK HEREEEEEE
+
     data_y_band2 = encode_data_y(data_pd_y_band2, var_task)
+    data_y_band2 = reduce_dataset_dualband(data_y_band2,indices_, preset["nn"]["num_obj_queries"])
     #
     ## a training set (80%) and a test set (20%)
     data_train_x_band1, data_test_x_band1, data_train_y_band1, data_test_y_band1 = train_test_split(
