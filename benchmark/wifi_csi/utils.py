@@ -515,7 +515,7 @@ def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_
 def log_attention_weights(model, y_pred, y_actual, epoch):
     """
     Log attention weights from all decoder layers to wandb based on count of people.
-    For each count (0-4), plot one random attention weight sample with labels and predictions.
+    For each count (0-4), select one random sample and visualize its attention weights across all decoder layers.
     """
     # Convert numpy arrays to torch tensors if needed
     if isinstance(y_actual, np.ndarray):
@@ -528,34 +528,33 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
     count_no_person = torch.sum(~where_9_happens, dim=1)
 
     decoder_layers = model.decoder.decoder_layers
-    for layer_idx, layer in enumerate(decoder_layers):
-        if layer_idx != len(decoder_layers) - 1:
+
+    # For each possible count (0, 1, 2, 3, 4, 5)
+    for i in range(6):
+        # Find examples with this count
+        indices = torch.where(count_no_person == i)[0]
+        if len(indices) == 0:
             continue
 
-        attn_weights = layer.cross_attn_weights.detach().clone()
-        if attn_weights is None:
-            continue
+        # Randomly select one example with this count - will be used for all layers
+        random_idx = indices[torch.randint(0, len(indices), (1,)).item()]
 
-        # Average over batch dimension if necessary
-        if attn_weights.dim() > 3:
-            attn_weights = attn_weights.mean(0)
+        # Get actual labels and predictions for this example
+        actual_sequence = y_actual[random_idx].cpu().numpy()
+        pred_sequence = y_pred[random_idx].cpu().numpy()
 
-        # For each possible count (0, 1, 2, 3, 4)
-        for i in range(6):
-            # Find examples with this count
-            indices = torch.where(count_no_person == i)[0]
-            if len(indices) == 0:
+        # Now iterate through layers using the same sample
+        for layer_idx, layer in enumerate(decoder_layers):
+            attn_weights = layer.cross_attn_weights.detach().clone()
+            if attn_weights is None:
                 continue
 
-            # Randomly select one example with this count
-            random_idx = indices[torch.randint(0, len(indices), (1,)).item()]
+            # Average over batch dimension if necessary
+            if attn_weights.dim() > 3:
+                attn_weights = attn_weights.mean(0)
 
             # Get attention weights for this example
             example_attn_weights = attn_weights[random_idx]
-
-            # Get actual labels and predictions for this example
-            actual_sequence = y_actual[random_idx].cpu().numpy()
-            pred_sequence = y_pred[random_idx].cpu().numpy()
 
             # Create heatmap figure with subplots
             fig, ax = plt.subplots(figsize=(12, 10))
@@ -586,4 +585,4 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
                 'epoch': epoch
             })
 
-        plt.close('all')
+            plt.close('all')
