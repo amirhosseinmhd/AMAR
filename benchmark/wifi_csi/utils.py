@@ -194,21 +194,63 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 def calculate_scores(y_true, y_pred):
-
+    """
+    Calculate all performance metrics for the predictions
+    Args:
+        y_true: numpy array of ground truth values
+        y_pred: numpy array of predicted values
+    Returns:
+        Dictionary containing all performance metrics
+    """
+    # Calculate basic metrics
+    absolute_diff = np.abs(y_true - y_pred)
+    
+    # Calculate TP, TN, FP, FN
     tp = np.minimum(y_true, y_pred)
     tn = np.where(np.maximum(y_true, y_pred) == 0, 1, 0)
     fp = np.maximum(0, y_pred - y_true) # Extra predictions
     fn = np.maximum(0, y_true - y_pred)  # Missed objects
+    
+    # Calculate per-activity metrics
     tp_per_activity = tp.sum(axis=0)
     tn_per_activity = tn.sum(axis=0)
     fp_per_activity = fp.sum(axis=0)
     fn_per_activity = fn.sum(axis=0)
-    precision_ = np.where((tp_per_activity + fp_per_activity) > 0,  tp_per_activity / (tp_per_activity + fp_per_activity + 1e-6) , 0)
-    recall_ = np.where((tp_per_activity + fn_per_activity) > 0,  tp_per_activity / (tp_per_activity + fn_per_activity + 1e-6) , 0)
-    f1_score_ = np.where((precision_ + recall_) > 0,  2 * (precision_ * recall_) / (precision_ + recall_ + 1e-6)  , 0)
-    accuracy_ = (tp_per_activity + tn_per_activity )/ (tp_per_activity + fn_per_activity + tn_per_activity + fp_per_activity)
-
-    return precision_.mean(), recall_.mean(), f1_score_.mean(), accuracy_.mean()
+    
+    # Calculate precision, recall, f1-score
+    precision_ = np.where((tp_per_activity + fp_per_activity) > 0, 
+                         tp_per_activity / (tp_per_activity + fp_per_activity + 1e-6), 0)
+    recall_ = np.where((tp_per_activity + fn_per_activity) > 0,
+                      tp_per_activity / (tp_per_activity + fn_per_activity + 1e-6), 0)
+    f1_score_ = np.where((precision_ + recall_) > 0,
+                        2 * (precision_ * recall_) / (precision_ + recall_ + 1e-6), 0)
+    accuracy_ = (tp_per_activity + tn_per_activity) / (tp_per_activity + fn_per_activity + tn_per_activity + fp_per_activity)
+    
+    # Calculate perfect predictions
+    perfect_prediction_mask = np.all(absolute_diff == 0, axis=1)
+    perfect_predictions = np.sum(perfect_prediction_mask)
+    batch_size = len(y_true)
+    perfect_prediction_percentage = (perfect_predictions / batch_size) * 100
+    
+    # Calculate total error
+    total_error = np.sum(absolute_diff) / batch_size
+    
+    # Calculate error per person and counting error
+    error_per_person = error_per_number_person(y_pred, y_true)
+    counting_error_perPerson = count_error(y_pred, y_true)
+    mean_count_error = counting_error_perPerson.mean()
+    
+    return {
+        'total_error': total_error,
+        'perfect_prediction_percentage': perfect_prediction_percentage,
+        'accuracy': accuracy_.mean(),
+        'error_per_person': error_per_person,
+        'mean_count_error': mean_count_error,
+        'counting_error_perPerson': counting_error_perPerson,
+        'precision': precision_.mean(),
+        'recall': recall_.mean(),
+        'f1_score': f1_score_.mean()
+    }
 
 def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103):
     m = X.shape[0]
@@ -297,63 +339,63 @@ def calculate_performance_metrics(y_true, y_pred, batch_size):
 
 
 def performance_metrics(y_true, y_pred, var_mode="joint_multihead", var_threshold=0.5):
+    """
+    Process predictions based on mode and calculate performance metrics
+    Args:
+        y_true: numpy array of ground truth values
+        y_pred: numpy array of predicted values
+        var_mode: prediction mode
+        var_threshold: threshold for baseline mode
+    Returns:
+        Dictionary containing all performance metrics. For multi_head mode, contains metrics for each layer.
+    """
     # Ensure inputs are numpy arrays
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
 
+    # Process predictions based on mode
     if var_mode == "count_classification_withConstrain":
-        batch_size, num_classes = y_pred.shape
+        return calculate_scores(y_true, y_pred)
     elif var_mode == "multi_head":
-        y_pred = y_pred[-1]
-        batch_size, num_heads, num_classes = y_pred.shape
-        y_pred_indices = np.argmax(y_pred, axis=-1)
-        y_pred = np.eye(num_classes)[y_pred_indices]
-        y_pred = y_pred.sum(axis=1)
-        y_true = y_true.sum(axis=1)
-        y_pred = y_pred[:, :-1]
-        y_true = y_true[:, :-1]
+        # Initialize dictionary to store metrics for each layer
+        all_layer_metrics = {}
+        
+        # Process each layer's predictions
+        for layer_idx in range(len(y_pred)):
+            layer_pred = y_pred[layer_idx]
+            # Convert predictions to one-hot encoded format
+            y_pred_indices = np.argmax(layer_pred, axis=-1)
+            layer_pred_one_hot = np.eye(layer_pred.shape[-1])[y_pred_indices]
+            
+            # Sum across heads
+            layer_pred_sum = layer_pred_one_hot.sum(axis=1)
+            y_true_sum = y_true.sum(axis=1)
+            
+            # Remove the last class (no-object class)
+            layer_pred_sum = layer_pred_sum[:, :-1]
+            y_true_sum = y_true_sum[:, :-1]
+            
+            # Calculate metrics for this layer
+            layer_metrics = calculate_scores(y_true_sum, layer_pred_sum)
+            all_layer_metrics[f'layer_{layer_idx}'] = layer_metrics
+            
+            # Store the last layer metrics at the top level for backward compatibility
+            if layer_idx == len(y_pred) - 1:
+                all_layer_metrics.update(layer_metrics)
+        
+        return all_layer_metrics
     elif var_mode == "count_classification":
-        batch_size, num_classes = y_pred.shape
-        # Apply custom threshold rounding and clipping
         threshold_round_vec = np.vectorize(threshold_round)
         y_pred = np.clip(threshold_round_vec(y_pred, threshold=0.5), a_min=0, a_max=5)
+        return calculate_scores(y_true, y_pred)
     elif var_mode == "baseline":
         y_pred = (1 / (1 + np.exp(-y_pred))).astype(float)
         y_true = y_true.reshape(y_true.shape[0], -1, 9)
         y_pred = y_pred.reshape(y_true.shape[0], y_true.shape[1], y_true.shape[2])
-        y_pred, y_true, batch_size = process_predictions(y_pred, y_true, var_threshold=0.5)
-        batch_size = y_true.shape[0]
+        y_pred, y_true, _ = process_predictions(y_pred, y_true, var_threshold=0.5)
+        return calculate_scores(y_true, y_pred)
     else:
         raise ValueError(f"Unsupported var_mode: {var_mode}")
-
-    # Calculate the absolute difference
-    absolute_diff = np.abs(y_true - y_pred)
-    # acc_bysample = (1 * absolute_diff == 0).sum(axis=1) / absolute_diff.shape[1]
-    # acc = acc_bysample.mean()
-    # std = acc_bysample.std()
-
-    # Find perfect predictions
-    perfect_prediction_mask = np.all(absolute_diff == 0, axis=1)
-    perfect_predictions = np.sum(perfect_prediction_mask)
-    perfect_prediction_percentage = (perfect_predictions / batch_size) * 100
-    total_error = np.sum(absolute_diff) / batch_size
-    error_per_person = error_per_number_person(y_pred, y_true)
-    counting_error_perPerson = count_error(y_pred,  y_true)
-    mean_count_error = counting_error_perPerson.mean()
-
-    precision_, recall_, f1_score_, acc = calculate_scores(y_true, y_pred)
-
-    return {
-        'total_error': total_error,
-        'perfect_prediction_percentage': perfect_prediction_percentage,
-        'accuracy': acc,
-        'error_per_person': error_per_person,
-        'mean_count_error': mean_count_error,
-        'counting_error_perPerson': counting_error_perPerson,
-        'precision': precision_,
-        'recall': recall_,
-        'f1_score': f1_score_
-    }
 
 
 def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
