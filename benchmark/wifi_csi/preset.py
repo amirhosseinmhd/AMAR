@@ -8,8 +8,8 @@ import os
 preset = {
     #
     ## define model
-    "wandb_name": "JOINT_DETR",
-    "model": "MLP",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "wandb_name": "High_FFN_LONGDECODER__LARGENUM_OBJECTQUERIES",
+    "model": "multiSense_X",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR
     # "model": "MLP",
@@ -28,7 +28,7 @@ preset = {
     ## data selection for experiments
     "data": {
         "num_users": ["0","1", "2", "3", "4", "5"] ,   # select number(s) of users, (e.g., ["0", "1"], ["2", "3", "4", "5"])
-        "wifi_band": ["2.4"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
+        "wifi_band": ["5"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
         "environment": ["classroom"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
         "length": 3000,                                 # default length of CSI
     },
@@ -42,8 +42,8 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 6e-4,                                     # learning rate
-        "epoch": 1,                                   # number of epochs
+        "lr": 5e-4,                                     # learning rate
+        "epoch": 300,                                   # number of epochs
         "batch_size": 16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -56,7 +56,7 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.3,  # label smoothing factor
+            "label_smoothing": 0,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
@@ -102,6 +102,6 @@ preset = {
     # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_classroom_meeting_room_DETR.pth",  # Path to pretrained models
     "pretrained_path": None,
     "transfer_scenario": "full",  # One of ["full", "feature_extractor", "feature_encoder"]
-    "save_model": False,  # Whether to save model components
+    "save_model": True,  # Whether to save model components
     "saving_path": "results/"
 }
