@@ -72,17 +72,23 @@ def run():
 
     y_activity = encode_data_y(data_pd_y, "activity")
     y_location = encode_data_y(data_pd_y, "location")
-
-    y_activity_n, y_location_n = reduce_dataset_joint(y_activity, y_location, preset["nn"]["num_obj_queries"])
+    if preset["model"] == "multiSense_X":
+        y_activity_n, y_location_n = reduce_dataset_joint_multiSenseX(y_activity, y_location)
+    else:
+        y_activity_n, y_location_n = reduce_dataset_joint(y_activity, y_location, preset["nn"]["num_obj_queries"])
 
     (X_train, X_test,
      y_train_loc, y_test_loc,
      y_train_act, y_test_act) = my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_state=103)
 
+    if preset["model"] == "multiSense_X":
+        run_model  = run_multi_senseX
+    if preset["model"] == "joint_detr":
+        run_model = run_joint_detr
 
-    result_act, result_loc = run_joint_detr(X_train, y_train_loc, y_train_act,
-                            X_test, y_test_loc, y_test_act,
-                            var_repeat)
+    result_act, result_loc = run_model(X_train, y_train_loc, y_train_act,
+                                                X_test, y_test_loc, y_test_act,
+                                                var_repeat)
     #
     ##
     # result["model"] = var_model
