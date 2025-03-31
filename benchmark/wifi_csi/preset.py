@@ -8,8 +8,8 @@ import os
 preset = {
     #
     ## define model
-    "wandb_name": "High_FFN_LONGDECODER__LARGENUM_OBJECTQUERIES",
-    "model": "multiSense_X",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "wandb_name": "10queries",
+    "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR
     # "model": "MLP",
@@ -43,7 +43,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 5e-4,                                     # learning rate
-        "epoch": 300,                                   # number of epochs
+        "epoch": 400,                                   # number of epochs
         "batch_size": 16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -56,17 +56,17 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0,  # label smoothing factor
+            "label_smoothing": 0.3,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
         "weight_decay": 2e-4,
         "num_obj_queries": 5,
-        "num_decoder_layers": 5,
+        "num_decoder_layers": 8,
         "dim_FFN": 512,
         "token_length": 200,
         "d_embedding": 32,
-        "n_attention_heads": 2
+        "n_attention_heads": 4
     },
     ## encoding of activities and locations
     "encoding": {
@@ -99,9 +99,12 @@ preset = {
             "e":    [0, 0, 0, 0, 1],
         },
     },
-    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_classroom_meeting_room_DETR.pth",  # Path to pretrained models
+    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_meeting_room_empty_room_DETR.pth",  # Path to pretrained models
     "pretrained_path": None,
-    "transfer_scenario": "full",  # One of ["full", "feature_extractor", "feature_encoder"]
+    "transfer_scenario": "feature_extractor",  # One of ["full", "feature_extractor", "feature_encoder"]
     "save_model": True,  # Whether to save model components
     "saving_path": "results/"
 }
+preset["layers_idxs"] = ["layer_" + str(preset["nn"]["num_decoder_layers"] - 1)] #  ["layer_"+str(i) for i in range(7)]
+
+

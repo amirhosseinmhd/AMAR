@@ -44,7 +44,7 @@ def train(model: Module,
           device: device,
           var_mode: str,
           patience: int = 150):  # Added patience parameter
-
+    var_epoch_saved = 0
     data_train_loader = DataLoader(data_train_set, var_batch_size, shuffle=True, pin_memory=True)
     data_test_loader = DataLoader(data_test_set, len(data_test_set))
 
@@ -122,56 +122,84 @@ def train(model: Module,
 
             dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
             # Log attention weights every N batches
-        if preset["model"] == "DETR"  and var_epoch % 10 == 0:
+        if preset["model"] == "DETR"  and var_epoch % 40 == 0:
             log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
+        if preset["model"] == "DETR":
+            print("*****************")
+            print("*****************")
+            layers_idxs =preset["layers_idxs"]
+            for layer_idx in layers_idxs:
+                layer_metrics = dict_error_test[layer_idx]
+                layer_train_metrics = dict_error_train[layer_idx]
+                wandb.log({
+                    f"{layer_idx}/epoch": var_epoch,
+                    f"{layer_idx}/train_loss": var_loss_train.item(),
+                    f"{layer_idx}/test_loss": var_loss_test.item(),
+                    f"{layer_idx}/total_error_train": layer_train_metrics['total_error'],
+                    f"{layer_idx}/total_error_test": layer_metrics['total_error'],
+                    f"{layer_idx}/perfect_prediction_percentage_test": layer_metrics['perfect_prediction_percentage'],
+                    f"{layer_idx}/perfect_prediction_percentage_train": layer_train_metrics[
+                        'perfect_prediction_percentage'],
+                    f"{layer_idx}/accuracy_test": layer_metrics['accuracy'],
+                    f"{layer_idx}/accuracy_train": layer_train_metrics['accuracy'],
+                    f"{layer_idx}/precision": layer_metrics['precision'],
+                    f"{layer_idx}/recall": layer_metrics['recall'],
+                    f"{layer_idx}/f1_score": layer_metrics['f1_score'],
+                    "learning_rate": optimizer.param_groups[0]['lr']
+                })
 
+                print(f"Layer {layer_idx} - Epoch {var_epoch}/{var_epochs}",
+                      "- %.6fs" % (time.time() - var_time_e0),
+                      f"- Loss Train %.6f" % var_loss_train.cpu(),
+                      f"- Loss Test %.6f" % var_loss_test.cpu(),
+                      f"- Total Error Train %.6f" % layer_train_metrics['total_error'],
+                      f"- Total Error Test %.6f" % layer_metrics['total_error'],
+                      f"- Perfect Prediction Percentage Train %.6f" % layer_train_metrics[
+                          'perfect_prediction_percentage'],
+                      f"- Perfect Prediction Percentage Test %.6f" % layer_metrics['perfect_prediction_percentage'],
+                      f"- Accuracy Train %.6f" % layer_train_metrics['accuracy'],
+                      f"- Accuracy Test %.6f" % layer_metrics['accuracy'],
+                      f"- Precision %.6f" % layer_metrics['precision'],
+                      f"- Recall %.6f" % layer_metrics['recall'],
+                      f"- F1 Score %.6f" % layer_metrics['f1_score'])
+        else:
+            # Original logging for non-multi_head modes
+            wandb.log({
+                "epoch": var_epoch,
+                "train_loss": var_loss_train.item(),
+                "test_loss": var_loss_test.item(),
+                "total_error_train": dict_error_train['total_error'],
+                "total_error_test": dict_error_test['total_error'],
+                "perfect_prediction_percentage_test": dict_error_test['perfect_prediction_percentage'],
+                "perfect_prediction_percentage_train": dict_error_train['perfect_prediction_percentage'],
+                "accuracy_test": dict_error_test['accuracy'],
+                "accuracy_train": dict_error_train['accuracy'],
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "precision": dict_error_test['precision'],
+                "recall": dict_error_test['recall'],
+                "f1_score": dict_error_test['f1_score']
+            })
+            print(f"Epoch {var_epoch}/{var_epochs}",
+                  "- %.6fs" % (time.time() - var_time_e0),
+                  "- Loss Train %.6f" % var_loss_train.cpu(),
+                  "- Loss Test %.6f" % var_loss_test.cpu(),
+                  "- Total Error Train %.6f" % dict_error_train['total_error'],
+                  "- Total Error Test %.6f" % dict_error_test['total_error'],
+                  "- Perfect Prediction Percentage Train %.6f" % dict_error_train['perfect_prediction_percentage'],
+                  "- Perfect Prediction Percentage Test %.6f" % dict_error_test['perfect_prediction_percentage'],
+                  "- Accuracy Train %.6f" % dict_error_train['accuracy'],
+                  "- Accuracy Test %.6f" % dict_error_test['accuracy'],
+                  "- Precision %.6f" % dict_error_test['precision'],
+                  "- Recall %.6f" % dict_error_test['recall'],
+                  "- F1 Score %.6f" % dict_error_test['f1_score'])
 
-        # Log metrics
-        wandb.log({
-            "epoch": var_epoch,
-            "train_loss": var_loss_train.item(),
-            "test_loss": var_loss_test.item(),
-            "total_error_train": dict_error_train['total_error'],
-            "total_error_test": dict_error_test['total_error'],
-            "perfect_prediction_percentage_test": dict_error_test['perfect_prediction_percentage'],
-            "perfect_prediction_percentage_train": dict_error_train['perfect_prediction_percentage'],
-            "accuracy_test": dict_error_test['accuracy'],
-            "accuracy_train": dict_error_train['accuracy'],
-            "learning_rate": optimizer.param_groups[0]['lr'],
-            "precision": dict_error_test['precision'],
-            "recall": dict_error_test['recall'],
-            "f1_score": dict_error_test['f1_score']
-        })
-
-        print(f"Epoch {var_epoch}/{var_epochs}",
-              "- %.6fs" % (time.time() - var_time_e0),
-              "- Loss %.6f" % var_loss_train.cpu(),
-              "- Test Loss %.6f" % var_loss_test.cpu(),
-              "- Total Error %.6f" % dict_error_test['total_error'],
-              "- Perfect Prediction Percentage Train %.6f" % dict_error_train['perfect_prediction_percentage'],
-              "- Perfect Prediction Percentage Test %.6f" % dict_error_test['perfect_prediction_percentage'],
-              "- Accuracy Test %.6f" % dict_error_test['accuracy'],
-              "- Accuracy Train %.6f" % dict_error_train['accuracy'],
-              "- Precision %.6f" % dict_error_test['precision'],
-              "- Recall %.6f" % dict_error_test['recall'],
-              "- F1 Score %.6f" % dict_error_test['f1_score'])
-
-        if (dict_error_test['f1_score'] > var_best_f1_score and
-                dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
+        if (var_epoch > 280 and dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
             var_best_PPP = dict_error_test['perfect_prediction_percentage']
 
             var_best_f1_score = dict_error_test['f1_score']
             var_best_weight = deepcopy(model.state_dict())
             var_epoch_saved = var_epoch
-            counter = 0  # Reset counter
-        else:
-            counter += 1  # Increment counter
 
-
-        # Early stopping check
-        if counter >= patience:
-            print(f"Early stopping triggered at epoch {var_epoch}")
-            break
     print(f"Epoch that the model was saved {var_epoch_saved}")
     return var_best_weight
 

@@ -341,6 +341,9 @@ class TransformerDecoder(nn.Module):
 
         # Create activity queries - learnable parameters
         self.query_embed = nn.Parameter(torch.randn(num_queries, d_model))  # 10 object queries
+        # Create fixed random query embeddings (non-learnable)
+        # query_embed = torch.randn(num_queries, d_model)
+        # self.register_buffer('query_embed', query_embed)
 
         # Create decoder layers
         decoder_layer = TransformerDecoderLayer(
@@ -360,7 +363,10 @@ class TransformerDecoder(nn.Module):
         # Assuming 10 is the number of activity classes
         self.class_embed = nn.Linear(d_model, 10)
 
-        self.tgt_embed = nn.Parameter(torch.zeros(num_queries, d_model))
+        # self.tgt_embed = nn.Parameter(torch.zeros(num_queries, d_model))
+        # Create fixed random target embeddings (non-learnable)
+        tgt_embed = torch.zeros(num_queries, d_model)  # Using randn instead of zeros for random initialization
+        self.register_buffer('tgt_embed', tgt_embed)
 
     def forward(self, memory):
         """
@@ -427,9 +433,9 @@ class TransformerDecoderLayer(nn.Module):
     def forward(self, tgt, memory, query_pos=None):
         # Cross attention
         tgt2, self.cross_attn_weights = self.cross_attn(
-            tgt + query_pos,
-            memory,
-            memory
+            query=self.with_pos_embed(tgt, query_pos),
+            key=memory,
+            value=memory
         )
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
@@ -460,7 +466,7 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
             key_padding_mask=key_padding_mask,
             need_weights=True,  # Always compute weights
             attn_mask=attn_mask,
-            average_attn_weights=True # gets the average across all heads
+            average_attn_weights=False # gets the average across all heads
         )
 
         # Apply temperature scaling to attention output
@@ -718,7 +724,7 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="experiment_classrom",
+            project="queries",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -743,11 +749,11 @@ def run_that_detr(data_train_x,
 
         if preset.get("pretrained_path"):
             model_detr, param_groups = load_model_components(
-                model_detr,
-                preset["pretrained_path"],
-                preset["nn"]["lr"],
-                preset.get("transfer_scenario"),
-                device
+                model=model_detr,
+                load_path=preset["pretrained_path"],
+                lr = preset["nn"]["lr"],
+                scenario=preset.get("transfer_scenario"),
+                device=device
             )
             optimizer = torch.optim.Adam(param_groups)
         else:
@@ -799,54 +805,89 @@ def run_that_detr(data_train_x,
         #
         ##
 
-        # data_test_y_c = data_test_y.sum(axis=1)
-        dict_true_acc = performance_metrics(data_test_y, predict_test_y, var_mode=var_mode)
+        layers_idxs = preset["layers_idxs"]
+
+        # Store results for each layer
+        all_layers_results = {}
+        dict_layer_acc = performance_metrics(data_test_y, predict_test_y, var_mode=var_mode)
+
+        # Process each layer separately
+        for idx, layer_idx in enumerate(layers_idxs):
+
+            layer_metrics = dict_layer_acc[layer_idx]
+
+            # Log metrics for this layer
+            wandb.log({
+                f"{layer_idx}/repeat": var_r,
+                f"{layer_idx}/train_time": var_time_1 - var_time_0,
+                f"{layer_idx}/test_time": var_time_2 - var_time_1,
+                f"{layer_idx}/TOTAL_TESTSET_ERROR": layer_metrics['total_error'],
+                f"{layer_idx}/TOTAL_TESTSET_perfect_prediction_percentage": layer_metrics[
+                    'perfect_prediction_percentage'],
+                f"{layer_idx}/TOTAL_ACCURACY": layer_metrics['accuracy'],
+                f"{layer_idx}/mean_count_error": layer_metrics['mean_count_error'],
+                f"{layer_idx}/error_per_person_1": layer_metrics['error_per_person'][0],
+                f"{layer_idx}/error_per_person_2": layer_metrics['error_per_person'][1],
+                f"{layer_idx}/error_per_person_3": layer_metrics['error_per_person'][2],
+                f"{layer_idx}/error_per_person_4": layer_metrics['error_per_person'][3],
+                f"{layer_idx}/error_per_person_5": layer_metrics['error_per_person'][4],
+                f"{layer_idx}/precision": layer_metrics['precision'],
+                f"{layer_idx}/recall": layer_metrics['recall'],
+                f"{layer_idx}/f1_score": layer_metrics['f1_score']
+            })
+
+            print(f"Layer {layer_idx} - %.6fs" % (var_time_2 - var_time_1),
+                  "- Total Error %.6f" % layer_metrics['total_error'],
+                  "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
+
+            # Store the results for each layer
+            if var_r == 0:  # Initialize lists on first repeat
+                result_ppp.append([])
+                result_time_train.append([])
+                result_time_test.append([])
+                result_total_error.append([])
+                result_precision.append([])
+                result_recall.append([])
+                result_f1_score.append([])
+                result_avg_count_error.append([])
+
+            # Append results for this layer
+
+            result_ppp[idx].append(layer_metrics['perfect_prediction_percentage'])
+            result_time_train[idx].append(var_time_1 - var_time_0)
+            result_time_test[idx].append(var_time_2 - var_time_1)
+            result_total_error[idx].append(layer_metrics['total_error'])
+            result_precision[idx].append(layer_metrics['precision'])
+            result_recall[idx].append(layer_metrics['recall'])
+            result_f1_score[idx].append(layer_metrics['f1_score'])
+            result_avg_count_error[idx].append(layer_metrics['mean_count_error'])
+
+    # Log average metrics across all layers and repeats
+    for layer_idx_num, layer_idx in enumerate(layers_idxs):
         wandb.log({
-            "repeat": var_r,
-            "train_time": var_time_1 - var_time_0,
-            "test_time": var_time_2 - var_time_1,
-            "TOTAL_TESTSET_ERROR": dict_true_acc['total_error'],
-            "TOTAL_TESTSET_perfect_prediction_percentage": dict_true_acc['perfect_prediction_percentage'],
-            "TOTAL_ACCURACY": dict_true_acc['accuracy'],
-            "mean_count_error": dict_true_acc['mean_count_error'],
-            "error_per_person_1": dict_true_acc['error_per_person'][0],
-            "error_per_person_2": dict_true_acc['error_per_person'][1],
-            "error_per_person_3": dict_true_acc['error_per_person'][2],
-            "error_per_person_4": dict_true_acc['error_per_person'][3],
-            "error_per_person_5": dict_true_acc['error_per_person'][4],
-            "precision": dict_true_acc['precision'],
-            "recall": dict_true_acc['recall'],
-            "f1_score": dict_true_acc['f1_score']
+            f"{layer_idx}/avg_accuracy": sum(result_ppp[layer_idx_num]) / len(result_ppp[layer_idx_num]),
+            f"{layer_idx}/avg_train_time": sum(result_time_train[layer_idx_num]) / len(
+                result_time_train[layer_idx_num]),
+            f"{layer_idx}/avg_test_time": sum(result_time_test[layer_idx_num]) / len(
+                result_time_test[layer_idx_num]),
+            f"{layer_idx}/avg_total_error": sum(result_total_error[layer_idx_num]) / len(
+                result_total_error[layer_idx_num]),
+            f"{layer_idx}/avg_precision": sum(result_precision[layer_idx_num]) / len(
+                result_precision[layer_idx_num]),
+            f"{layer_idx}/avg_recall": sum(result_recall[layer_idx_num]) / len(result_recall[layer_idx_num]),
+            f"{layer_idx}/avg_f1_score": sum(result_f1_score[layer_idx_num]) / len(result_f1_score[layer_idx_num]),
+            f"{layer_idx}/avg_count_error": sum(result_avg_count_error[layer_idx_num]) / len(
+                result_avg_count_error[layer_idx_num]),
         })
-        print(" %.6fs" % (time.time() - var_time_1),
-              "- Total Error %.6f" % dict_true_acc['total_error'],
-              "-  perfect_prediction_percentage %.6f" % dict_true_acc['perfect_prediction_percentage'],
-              )
-        #
-        #
 
-        #
-        result_ppp.append(dict_true_acc['perfect_prediction_percentage'])
-        result_time_train.append(var_time_1 - var_time_0)
-        result_time_test.append(var_time_2 - var_time_1)
-        result_total_error.append(dict_true_acc['total_error'])
-        result_precision.append(dict_true_acc['precision'])
-        result_recall.append(dict_true_acc['recall'])
-        result_f1_score.append(dict_true_acc['f1_score'])
-        result_avg_count_error.append(dict_true_acc['mean_count_error'])
+    # Use the last layer for visualization and final results
+    last_layer = layers_idxs[-1]
+    last_layer_predictions = predict_test_y[last_layer] if isinstance(predict_test_y, dict) else predict_test_y
+    # dict_true_acc = all_layers_results[last_layer]
 
-    wandb.log({
-        "avg_accuracy": sum(result_ppp) / len(result_ppp),
-        "avg_train_time": sum(result_time_train) / len(result_time_train),
-        "avg_test_time": sum(result_time_test) / len(result_time_test),
-        "avg_total_error": sum(result_total_error) / len(result_total_error),
-        "avg_precision": sum(result_precision) / len(result_precision),
-        "avg_recall": sum(result_recall) / len(result_recall),
-        "avg_f1_score": sum(result_f1_score) / len(result_f1_score),
-        "avg_count_error": sum(result_avg_count_error) / len(result_avg_count_error),
-    })
+    # Run visualization with the last layer's predictions
     viz_stats = visualize_model_performance(
-        y_pred=predict_test_y,
+        y_pred=last_layer_predictions,
         y_true=data_test_y,
         var_mode=var_mode,
         save_dir=f'./visualizations/experiment_{var_r}_{var_mode}'
@@ -858,5 +899,5 @@ def run_that_detr(data_train_x,
         print(f"Class {i}: {error:.4f}")
     print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
     wandb.finish()
-    return dict_true_acc
+    return all_layers_results
 

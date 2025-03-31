@@ -268,6 +268,30 @@ def my_train_test_split(X, y_location_n, y_activity_n, test_size=0.2, random_sta
     y_test_act = y_activity_n [indices_test]
 
     return X_train, X_test, y_train_loc, y_test_loc, y_train_act, y_test_act
+def performance_metrics_joint_multiSensX(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
+    y_true_act = np.array(y_true_act)
+    y_pred_act = np.array(y_pred_act)
+    y_true_loc = np.array(y_true_loc)
+    y_pred_loc = np.array((y_pred_loc>0.5).astype(int) ) # batch size by 5
+
+    y_pred_indices = np.argmax(y_pred_act, axis=-1)
+    y_pred_act = np.eye(y_pred_act.shape[-1])[y_pred_indices]
+
+    # batchsize by 5 by 9
+    mask_ = y_pred_loc==0
+    y_pred_act[mask_] = [0, 0 , 0 , 0 , 0 , 0, 0,0 , 0]
+    y_pred_act = y_pred_act.sum(axis=1)
+
+
+
+    y_true_act = y_true_act.sum(axis=1)
+
+    # Metrics for activity prediction
+    act_metrics = calculate_scores(y_true_act, y_pred_act)
+    # Metrics for location prediction
+    loc_metrics = calculate_scores(y_true_loc, y_pred_loc)
+    return act_metrics, loc_metrics
+
 def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
     # Ensure inputs are numpy arrays
     y_true_act = np.array(y_true_act)
@@ -303,6 +327,7 @@ def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
     return act_metrics, loc_metrics
 
 def calculate_performance_metrics(y_true, y_pred, batch_size):
+    # seems like this function is out of date..
         # Calculate the absolute difference
         absolute_diff = np.abs(y_true - y_pred)
 
@@ -347,7 +372,7 @@ def performance_metrics(y_true, y_pred, var_mode="joint_multihead", var_threshol
         var_mode: prediction mode
         var_threshold: threshold for baseline mode
     Returns:
-        Dictionary containing all performance metrics. For multi_head mode, contains metrics for each layer.
+        Dictionary containing all performance metrics
     """
     # Ensure inputs are numpy arrays
     y_true = np.array(y_true)
@@ -355,7 +380,7 @@ def performance_metrics(y_true, y_pred, var_mode="joint_multihead", var_threshol
 
     # Process predictions based on mode
     if var_mode == "count_classification_withConstrain":
-        return calculate_scores(y_true, y_pred)
+        pass
     elif var_mode == "multi_head":
         # Initialize dictionary to store metrics for each layer
         all_layer_metrics = {}
@@ -385,17 +410,37 @@ def performance_metrics(y_true, y_pred, var_mode="joint_multihead", var_threshol
         
         return all_layer_metrics
     elif var_mode == "count_classification":
+        batch_size, num_classes = y_pred.shape
+        # Apply custom threshold rounding and clipping
         threshold_round_vec = np.vectorize(threshold_round)
         y_pred = np.clip(threshold_round_vec(y_pred, threshold=0.5), a_min=0, a_max=5)
-        return calculate_scores(y_true, y_pred)
     elif var_mode == "baseline":
         y_pred = (1 / (1 + np.exp(-y_pred))).astype(float)
         y_true = y_true.reshape(y_true.shape[0], -1, 9)
         y_pred = y_pred.reshape(y_true.shape[0], y_true.shape[1], y_true.shape[2])
         y_pred, y_true, _ = process_predictions(y_pred, y_true, var_threshold=0.5)
-        return calculate_scores(y_true, y_pred)
     else:
         raise ValueError(f"Unsupported var_mode: {var_mode}")
+
+    # Calculate all metrics
+    return calculate_scores(y_true, y_pred)
+
+def reduce_dataset_joint_multiSenseX(data_activity, data_location):
+    new_data_activity = []
+    y_location_n = data_location.sum(axis=1)
+    for i in range(0, data_location.shape[0]):
+        sample_activity = data_activity[i]
+        # Count non-zero rows-pp
+        legend_non_zero = sample_activity.sum(axis=1) # This gives us which queries are redundant or possible to eliminate
+
+
+        new_sample_activity = np.delete(sample_activity, (legend_non_zero == 0).argmax(), axis=0)
+
+
+        new_data_activity.append(new_sample_activity)
+    new_data_activity = np.array(new_data_activity)
+
+    return new_data_activity, y_location_n
 
 
 def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
@@ -407,8 +452,6 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
     for i in range(0, data_location.shape[0]):
         sample_location = data_location[i]
         sample_activity = data_activity[i]
-        if i ==1000:
-            print("ff")
         # Count non-zero rows-pp
         legend_non_zero = sample_activity.sum(axis=1) # This gives us which queries are redundant or possible to eliminate
 
@@ -609,40 +652,59 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
             if attn_weights is None:
                 continue
 
-            # Average over batch dimension if necessary
-            if attn_weights.dim() > 3:
-                attn_weights = attn_weights.mean(0)
+            # Assuming attn_weights shape is now [batch_size, num_heads, target_seq_len, source_seq_len]
+            example_attn_weights = attn_weights[random_idx]  # Shape: [num_heads, target_seq_len, source_seq_len]
+            num_heads = example_attn_weights.shape[0]
 
-            # Get attention weights for this example
-            example_attn_weights = attn_weights[random_idx]
+            # Calculate grid dimensions for subplots
+            grid_size = int(np.ceil(np.sqrt(num_heads)))
+            fig, axes = plt.subplots(grid_size, grid_size, figsize=(20, 18))
+            axes = axes.flatten()
 
-            # Create heatmap figure with subplots
-            fig, ax = plt.subplots(figsize=(12, 10))
+            # Create a heatmap for each attention head
+            for head_idx in range(num_heads):
+                ax = axes[head_idx]
 
-            # Add heatmap
-            sns.heatmap(
-                example_attn_weights.cpu().numpy(),
-                cmap='viridis',
-                xticklabels=range(example_attn_weights.shape[1]),
-                yticklabels=[f'Q {j}' for j in range(example_attn_weights.shape[0])],
-                ax=ax
-            )
+                # Get attention weights for this head
+                head_weights = example_attn_weights[head_idx]
 
-            # Add title with sample info
-            plt.title(f'Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
-                      f'Sample Index: {random_idx}\n' +
-                      f'Actual: {actual_sequence}\n' +
-                      f'Prediction: {pred_sequence}',
-                      fontsize=12)
+                # Add heatmap
+                sns.heatmap(
+                    head_weights.cpu().numpy(),
+                    cmap='viridis',
+                    xticklabels=range(head_weights.shape[1]) if head_idx >= num_heads - grid_size else False,
+                    yticklabels=[f'Q {j}' for j in
+                                 range(head_weights.shape[0])] if head_idx % grid_size == 0 else False,
+                    ax=ax,
+                    cbar=head_idx == 0  # Only show colorbar for the first plot
+                )
 
-            plt.xlabel('Encoder Sequence Position')
-            plt.ylabel('Query')
+                # Add head title
+                ax.set_title(f'Head {head_idx}', fontsize=10)
+
+                # Only add labels for the bottom and left subplots
+                if head_idx >= num_heads - grid_size:
+                    ax.set_xlabel('Encoder Position', fontsize=8)
+                if head_idx % grid_size == 0:
+                    ax.set_ylabel('Query', fontsize=8)
+
+            # Hide any unused subplots
+            for idx in range(num_heads, grid_size * grid_size):
+                axes[idx].axis('off')
+
+            # Add main title with sample info
+            plt.suptitle(f'Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
+                         f'Sample Index: {random_idx}\n' +
+                         f'Actual: {actual_sequence}\n' +
+                         f'Prediction: {pred_sequence}',
+                         fontsize=14)
+
             plt.tight_layout()
+            plt.subplots_adjust(top=0.9)  # Make room for the suptitle
 
             # Log to wandb
             wandb.log({
                 f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(fig),
-                'epoch': epoch
             })
 
             plt.close('all')
