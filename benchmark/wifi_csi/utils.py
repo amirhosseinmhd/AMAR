@@ -317,47 +317,48 @@ def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
     y_true_act = y_true_act.sum(axis=1)
 
     # Metrics for activity prediction
-    act_metrics = calculate_performance_metrics(y_true_act, last_act_pred, batch_size)
+    act_metrics = calculate_scores(y_true_act, last_act_pred, batch_size)
 
     # Metrics for location prediction
-    loc_metrics = calculate_performance_metrics(y_true_loc, last_loc_pred, batch_size)
+    loc_metrics = calculate_scores(y_true_loc, last_loc_pred, batch_size)
 
     return act_metrics, loc_metrics
 
-def calculate_performance_metrics(y_true, y_pred, batch_size):
-    # seems like this function is out of date..
-        # Calculate the absolute difference
-        absolute_diff = np.abs(y_true - y_pred)
+##### THIS CODE IS DEPRICET AND OUT OF DATE
+# def calculate_performance_metrics(y_true, y_pred, batch_size):
+#     # seems like this function is out of date..
+#         # Calculate the absolute difference
+#         absolute_diff = np.abs(y_true - y_pred)
 
-        # Find perfect predictions
-        perfect_prediction_mask = np.all(absolute_diff == 0, axis=1)
-        perfect_predictions = np.sum(perfect_prediction_mask)
-        perfect_prediction_percentage = (perfect_predictions / batch_size) * 100
+#         # Find perfect predictions
+#         perfect_prediction_mask = np.all(absolute_diff == 0, axis=1)
+#         perfect_predictions = np.sum(perfect_prediction_mask)
+#         perfect_prediction_percentage = (perfect_predictions / batch_size) * 100
 
-        # Calculate total error
-        total_error = np.sum(absolute_diff) / batch_size
+#         # Calculate total error
+#         total_error = np.sum(absolute_diff) / batch_size
 
-        # Calculate error per person
-        error_per_person = error_per_number_person(y_pred, y_true)
+#         # Calculate error per person
+#         error_per_person = error_per_number_person(y_pred, y_true)
 
-        # Calculate counting error per person
-        counting_error_perPerson = count_error(y_pred, y_true)
-        mean_count_error = counting_error_perPerson.mean()
+#         # Calculate counting error per person
+#         counting_error_perPerson = count_error(y_pred, y_true)
+#         mean_count_error = counting_error_perPerson.mean()
 
-        # Calculate precision, recall, f1-score and accuracy
-        precision_, recall_, f1_score_, acc = calculate_scores(y_true, y_pred)
+#         # Calculate precision, recall, f1-score and accuracy
+#         precision_, recall_, f1_score_, acc = calculate_scores(y_true, y_pred)
 
-        return {
-            'total_error': total_error,
-            'perfect_prediction_percentage': perfect_prediction_percentage,
-            'accuracy': acc,
-            'error_per_person': error_per_person,
-            'mean_count_error': mean_count_error,
-            'counting_error_perPerson': counting_error_perPerson,
-            'precision': precision_,
-            'recall': recall_,
-            'f1_score': f1_score_
-        }
+#         return {
+#             'total_error': total_error,
+#             'perfect_prediction_percentage': perfect_prediction_percentage,
+#             'accuracy': acc,
+#             'error_per_person': error_per_person,
+#             'mean_count_error': mean_count_error,
+#             'counting_error_perPerson': counting_error_perPerson,
+#             'precision': precision_,
+#             'recall': recall_,
+#             'f1_score': f1_score_
+#         }
 
 
 
