@@ -291,6 +291,9 @@ def performance_metrics_joint_multiSensX(y_true_act, y_pred_act, y_true_loc, y_p
     return act_metrics, loc_metrics
 
 def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
+
+    ### This function should be integrated to main performance metrics function. The method involve
+    ### in changing the main function so that it returns the two metrics.
     # Ensure inputs are numpy arrays
     y_true_act = np.array(y_true_act)
     y_pred_act = np.array(y_pred_act)

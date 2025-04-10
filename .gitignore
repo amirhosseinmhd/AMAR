@@ -15,7 +15,7 @@ benchmark/wifi_csi/preset.py.save
 benchmark/wifi_csi/results/
 benchmark/wifi_csi/wandb/
 wandb/
-
+benchmark/wifi_csi/preset.py
 result/
 __pycache__/
 dataset/wifi_csi/.DS_Store
