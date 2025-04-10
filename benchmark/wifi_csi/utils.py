@@ -1,17 +1,11 @@
 import numpy as np
-import os
-import time
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, f1_score
-import numpy as np
 import torch
 import json
-import numpy as np
 import wandb
 import os
-
 
 def load_model_components(model, load_path, lr,  scenario="full", device=None):
     """
@@ -95,7 +89,11 @@ def save_model_components(preset, model):
         scenario: One of ["full", "feature_extractor", "feature_encoder"]
     """
     save_dir = preset.get("saving_path") + f"model_0"
-    os.makedirs(save_dir, exist_ok=True)
+    saving_path = preset.get("saving_path", "0")
+    if not os.path.exists(saving_path):
+        raise ValueError(f"Saving path {saving_path} does not exist.")
+    
+    save_dir = saving_path + f"model_0"
     env = "_".join(preset["data"]["environment"])
     model_ = preset["model"]
     torch.save(model.state_dict(), f"{save_dir}/PT_{env}_{model_}.pth")
