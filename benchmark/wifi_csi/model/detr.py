@@ -921,6 +921,9 @@ def run_that_detr(data_train_x,
     # dict_true_acc = all_layers_results[last_layer]
 
     # Run visualization with the last layer's predictions
+    
+    log_random_attention_weights_final(model_detr, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,
         y_true=data_test_y,
