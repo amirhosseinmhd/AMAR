@@ -146,7 +146,8 @@ def train(model: Module,
                     f"{layer_idx}/recall": layer_metrics['recall'],
                     f"{layer_idx}/f1_score": layer_metrics['f1_score'],
                     "learning_rate": optimizer.param_groups[0]['lr']
-                })
+                }, 
+                step=var_epoch)
 
                 print(f"Layer {layer_idx} - Epoch {var_epoch}/{var_epochs}",
                       "- %.6fs" % (time.time() - var_time_e0),
@@ -178,7 +179,8 @@ def train(model: Module,
                 "precision": dict_error_test['precision'],
                 "recall": dict_error_test['recall'],
                 "f1_score": dict_error_test['f1_score']
-            })
+            }, 
+            step=var_epoch)
             print(f"Epoch {var_epoch}/{var_epochs}",
                   "- %.6fs" % (time.time() - var_time_e0),
                   "- Loss Train %.6f" % var_loss_train.cpu(),
