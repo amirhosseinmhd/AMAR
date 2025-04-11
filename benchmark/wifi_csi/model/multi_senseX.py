@@ -342,7 +342,9 @@ def  multisense_loss(act_logits, activity_targets, loc_pred, location_targets,  
     gt_mask = (location_targets > 0.5)
 
     # Combine prediction mask with ground truth mask
-    valid_mask = mask & gt_mask
+        # valid_mask = mask & gt_mask
+
+    valid_mask = mask | ~mask
 
     # If there are any valid locations, compute activity loss
     if valid_mask.any():
