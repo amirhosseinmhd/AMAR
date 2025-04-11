@@ -837,7 +837,7 @@ def run_that_detr(data_train_x,
                 f"test_results/{layer_idx}/precision": layer_metrics['precision'],
                 f"test_results/{layer_idx}/recall": layer_metrics['recall'],
                 f"test_results/{layer_idx}/f1_score": layer_metrics['f1_score']
-            }, step=var_r)  # Use a large offset + repeat index as step
+            }, step=var_r+100000)  # Use a large offset + repeat index as step
 
             print(f"Layer {layer_idx} - %.6fs" % (var_time_2 - var_time_1),
                   "- Total Error %.6f" % layer_metrics['total_error'],
