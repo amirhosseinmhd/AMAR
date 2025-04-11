@@ -369,8 +369,8 @@ class TransformerDecoder(nn.Module):
         # Create fixed random query embeddings (non-learnable)
         # query_embed = torch.randn(num_queries, d_model)
         # self.register_buffer('query_embed', query_embed)
-        max_seq_len=200
-        self.memory_pos_encoding = MemoryPositionalEncoding(d_model, max_seq_len, dropout)
+
+        self.memory_pos_encoding = MemoryPositionalEncoding(d_model, seq_length, dropout)
 
         # Create decoder layers
         decoder_layer = TransformerDecoderLayer(
