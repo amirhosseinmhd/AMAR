@@ -6,6 +6,7 @@
 #
 ##
 import os
+import math
 import time
 import torch
 import numpy as np
@@ -688,6 +689,7 @@ def run_that_detr(data_train_x,
     #
     ##
     ## ========================================= Train & Evaluate =========================================
+    result_accuracy = []
     result_ppp = []
     result_time_train = []
     result_time_test = []
@@ -724,7 +726,7 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="queries",
+            project="Final_",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -817,24 +819,25 @@ def run_that_detr(data_train_x,
             layer_metrics = dict_layer_acc[layer_idx]
 
             # Log metrics for this layer
+# In the test results section of run_that_detr
             wandb.log({
-                f"{layer_idx}/repeat": var_r,
-                f"{layer_idx}/train_time": var_time_1 - var_time_0,
-                f"{layer_idx}/test_time": var_time_2 - var_time_1,
-                f"{layer_idx}/TOTAL_TESTSET_ERROR": layer_metrics['total_error'],
-                f"{layer_idx}/TOTAL_TESTSET_perfect_prediction_percentage": layer_metrics[
+                f"test_results/{layer_idx}/repeat": var_r,
+                f"test_results/{layer_idx}/train_time": var_time_1 - var_time_0,
+                f"test_results/{layer_idx}/test_time": var_time_2 - var_time_1,
+                f"test_results/{layer_idx}/TOTAL_TESTSET_ERROR": layer_metrics['total_error'],
+                f"test_results/{layer_idx}/TOTAL_TESTSET_perfect_prediction_percentage": layer_metrics[
                     'perfect_prediction_percentage'],
-                f"{layer_idx}/TOTAL_ACCURACY": layer_metrics['accuracy'],
-                f"{layer_idx}/mean_count_error": layer_metrics['mean_count_error'],
-                f"{layer_idx}/error_per_person_1": layer_metrics['error_per_person'][0],
-                f"{layer_idx}/error_per_person_2": layer_metrics['error_per_person'][1],
-                f"{layer_idx}/error_per_person_3": layer_metrics['error_per_person'][2],
-                f"{layer_idx}/error_per_person_4": layer_metrics['error_per_person'][3],
-                f"{layer_idx}/error_per_person_5": layer_metrics['error_per_person'][4],
-                f"{layer_idx}/precision": layer_metrics['precision'],
-                f"{layer_idx}/recall": layer_metrics['recall'],
-                f"{layer_idx}/f1_score": layer_metrics['f1_score']
-            })
+                f"test_results/{layer_idx}/TOTAL_ACCURACY": layer_metrics['accuracy'],
+                f"test_results/{layer_idx}/mean_count_error": layer_metrics['mean_count_error'],
+                f"test_results/{layer_idx}/error_per_person_1": layer_metrics['error_per_person'][0],
+                f"test_results/{layer_idx}/error_per_person_2": layer_metrics['error_per_person'][1],
+                f"test_results/{layer_idx}/error_per_person_3": layer_metrics['error_per_person'][2],
+                f"test_results/{layer_idx}/error_per_person_4": layer_metrics['error_per_person'][3],
+                f"test_results/{layer_idx}/error_per_person_5": layer_metrics['error_per_person'][4],
+                f"test_results/{layer_idx}/precision": layer_metrics['precision'],
+                f"test_results/{layer_idx}/recall": layer_metrics['recall'],
+                f"test_results/{layer_idx}/f1_score": layer_metrics['f1_score']
+            }, step=var_r)  # Use a large offset + repeat index as step
 
             print(f"Layer {layer_idx} - %.6fs" % (var_time_2 - var_time_1),
                   "- Total Error %.6f" % layer_metrics['total_error'],
@@ -850,9 +853,10 @@ def run_that_detr(data_train_x,
                 result_recall.append([])
                 result_f1_score.append([])
                 result_avg_count_error.append([])
+                result_accuracy.append([])
 
             # Append results for this layer
-
+            result_accuracy[idx].append(layer_metrics['accuracy'])
             result_ppp[idx].append(layer_metrics['perfect_prediction_percentage'])
             result_time_train[idx].append(var_time_1 - var_time_0)
             result_time_test[idx].append(var_time_2 - var_time_1)
@@ -865,20 +869,22 @@ def run_that_detr(data_train_x,
     # Log average metrics across all layers and repeats
     for layer_idx_num, layer_idx in enumerate(layers_idxs):
         wandb.log({
-            f"{layer_idx}/avg_accuracy": sum(result_ppp[layer_idx_num]) / len(result_ppp[layer_idx_num]),
-            f"{layer_idx}/avg_train_time": sum(result_time_train[layer_idx_num]) / len(
+            f"test_results/{layer_idx}/avg_PPP": sum(result_ppp[layer_idx_num]) / len(result_ppp[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_train_time": sum(result_time_train[layer_idx_num]) / len(
                 result_time_train[layer_idx_num]),
-            f"{layer_idx}/avg_test_time": sum(result_time_test[layer_idx_num]) / len(
+            f"test_results/{layer_idx}/avg_test_time": sum(result_time_test[layer_idx_num]) / len(
                 result_time_test[layer_idx_num]),
-            f"{layer_idx}/avg_total_error": sum(result_total_error[layer_idx_num]) / len(
+            f"test_results/{layer_idx}/avg_total_error": sum(result_total_error[layer_idx_num]) / len(
                 result_total_error[layer_idx_num]),
-            f"{layer_idx}/avg_precision": sum(result_precision[layer_idx_num]) / len(
+            f"test_results/{layer_idx}/avg_precision": sum(result_precision[layer_idx_num]) / len(
                 result_precision[layer_idx_num]),
-            f"{layer_idx}/avg_recall": sum(result_recall[layer_idx_num]) / len(result_recall[layer_idx_num]),
-            f"{layer_idx}/avg_f1_score": sum(result_f1_score[layer_idx_num]) / len(result_f1_score[layer_idx_num]),
-            f"{layer_idx}/avg_count_error": sum(result_avg_count_error[layer_idx_num]) / len(
+            f"test_results/{layer_idx}/avg_recall": sum(result_recall[layer_idx_num]) / len(result_recall[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_f1_score": sum(result_f1_score[layer_idx_num]) / len(result_f1_score[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_count_error": sum(result_avg_count_error[layer_idx_num]) / len(
                 result_avg_count_error[layer_idx_num]),
-        })
+            f"test_results/{layer_idx}/avg_accuracy": sum(result_accuracy[layer_idx_num]) / len(
+                result_accuracy[layer_idx_num])
+        })  # Use an even larger offset for averages
 
     # Use the last layer for visualization and final results
     last_layer = layers_idxs[-1]
