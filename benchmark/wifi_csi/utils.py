@@ -449,7 +449,7 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
     new_data_activity = []
     new_data_location = []
 
-    zero = np.zeros((num_object_queries, 1))
+    zero = np.zeros((5, 1))
 
     for i in range(0, data_location.shape[0]):
         sample_location = data_location[i]
@@ -477,7 +477,7 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
 
 def reduce_dataset_dualband(data, indicies_, num_object_queries=None):
     new_data = []
-    zero = np.zeros((num_object_queries, 1))
+    zero = np.zeros((5, 1))
 
     for (i, sample) in enumerate(data):
         # Count non-zero rows-pp
@@ -496,7 +496,7 @@ def reduce_dataset_dualband(data, indicies_, num_object_queries=None):
 
 def reduce_dataset(data, num_object_queries=None):
     new_data = []
-    zero = np.zeros((num_object_queries, 1))
+    zero = np.zeros((5, 1))
 
     for sample in data:
         # Count non-zero rows-pp

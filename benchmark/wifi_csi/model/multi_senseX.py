@@ -74,14 +74,6 @@ class MultiSenseX(torch.nn.Module):
         # --- Activity Prediction for Active Locations ---
 
         act_logits = torch.stack([head(z) for head in self.act_heads], dim=1) #(batch_size, 5, 9)
-        # act_logits = {}
-        #
-        # for loc_idx in range(5):
-        #     # Check if ANY sample in the batch has this location active
-        #     if mask[:, loc_idx].any():
-        #         # Compute activity logits for this location
-        #         logits = self.act_heads[loc_idx](z)  # (batch_size, 9)
-        #         act_logits[loc_idx] = logits * mask[:, loc_idx].unsqueeze(-1).float()
 
         return act_logits, loc_pred, mask
 
