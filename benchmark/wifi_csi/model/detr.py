@@ -160,25 +160,19 @@ class Encoder(torch.nn.Module):
         self.layer_dropout_0 = torch.nn.Dropout(0.1)
         #
         ##
-        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, 1e-6)
+        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
         #
-        layer_cnn = []
-        #
-        for var_size in var_size_cnn:
-            #
-            layer = torch.nn.Sequential(torch.nn.Conv1d(var_dim_feature,
-                                                        var_dim_feature,
-                                                        var_size,
-                                                        padding="same"),
-                                        torch.nn.BatchNorm1d(var_dim_feature),
-                                        torch.nn.Dropout(0.1),
-                                        torch.nn.LeakyReLU())
-            layer_cnn.append(layer)
-        #
-        self.layer_cnn = torch.nn.ModuleList(layer_cnn)
+        # Replace CNN layers with a standard FFN√√Dropout
+        self.ffn = torch.nn.Sequential(
+            torch.nn.Linear(var_dim_feature, var_dim_feature),  # Expand dimension (typically 4x)
+            torch.nn.LeakyReLU(),  # Standard activation in modern transformers
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(var_dim_feature, var_dim_feature)  # Project back to original dimension
+        )
         #
         self.layer_dropout_1 = torch.nn.Dropout(0.1)
-
+        # Add layer norm after FFN
+        self.layer_norm_2 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
     #
     ##
     def forward(self,
@@ -190,28 +184,19 @@ class Encoder(torch.nn.Module):
         var_t = self.layer_norm_0(var_t)
         #
         var_t, _ = self.layer_attention(var_t, var_t, var_t)
-
         var_t = self.layer_dropout_0(var_t)
         #
         var_t = var_t + var_input
         #
         ##
         var_s = self.layer_norm_1(var_t)
-
-        var_s = torch.permute(var_s, (0, 2, 1))
-        #
-        var_c = torch.stack([layer(var_s) for layer in self.layer_cnn], dim=0)
-        #
-        var_s = torch.sum(var_c, dim=0) / len(self.layer_cnn)
-        #
+        var_s = self.ffn(var_s)
         var_s = self.layer_dropout_1(var_s)
-
-        var_s = torch.permute(var_s, (0, 2, 1))
-        #
         var_output = var_s + var_t
+        # Apply final layer norm
+        # var_output = self.layer_norm_2(var_output)
         #
         return var_output
-
 
 #
 ##
@@ -301,11 +286,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
             nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
-            nn.Conv1d(128, output_channels, kernel_size=1),
+            nn.Conv1d(128, 64, kernel_size=1),
             nn.ReLU(),
-            # DepthwiseSeparableConv(output_channels, output_channels, kernel_size=5, padding=2),
-            # nn.Conv1d(64, output_channels, kernel_size=1),
-            # nn.ReLU()
+            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
+            nn.Conv1d(64, output_channels, kernel_size=1),
+            nn.ReLU()
             # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
             # nn.Conv1d(32, output_channels, kernel_size=1),
             # nn.ReLU(),
@@ -770,7 +755,7 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="Final_",
+            project="test",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
