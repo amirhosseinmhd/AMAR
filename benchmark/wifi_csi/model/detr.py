@@ -101,6 +101,45 @@ class Gaussian_Position(torch.nn.Module):
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
+
+class MemoryPositionalEncoding(nn.Module):
+    """
+    Simple 1D positional encoding for the memory (encoder output)
+    to be used in the decoder's cross-attention mechanism.
+    """
+
+    def __init__(self, d_model, max_seq_len=100, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Create positional encodings once and for all
+        pe = torch.zeros(max_seq_len, d_model)
+        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        # Apply sine to even indices, cosine to odd indices
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # Make pe not a model parameter (we don't need to train it)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, d_model]
+        Returns:
+            Positional encoding to be added to x, same shape as x
+        """
+        # Get positional encoding for the length of the input sequence
+        seq_len = x.size(1)
+        pos_encoding = self.pe[:, :seq_len, :]
+
+        # Broadcast to batch dimension
+        return pos_encoding
+
+
 class Encoder(torch.nn.Module):
     #
     ##
@@ -335,7 +374,7 @@ class Transformer_Encoder(torch.nn.Module):
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
-                 temp_cross_attention=1):
+                 temp_cross_attention=1, seq_length=200):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
@@ -345,6 +384,8 @@ class TransformerDecoder(nn.Module):
         # Create fixed random query embeddings (non-learnable)
         # query_embed = torch.randn(num_queries, d_model)
         # self.register_buffer('query_embed', query_embed)
+        max_seq_len=200
+        self.memory_pos_encoding = MemoryPositionalEncoding(d_model, max_seq_len, dropout)
 
         # Create decoder layers
         decoder_layer = TransformerDecoderLayer(
@@ -381,9 +422,9 @@ class TransformerDecoder(nn.Module):
         # Initialize decoder input with zero queries
         tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
-        # Get positional queries
+        # Get positions
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
-
+        memory_pos = self.memory_pos_encoding(memory)
         # Store intermediate outputs
         intermediate = []
 
@@ -393,7 +434,9 @@ class TransformerDecoder(nn.Module):
             output = layer(
                 tgt=output,
                 memory=memory,
-                query_pos=query_pos
+                query_pos=query_pos,
+                memory_pos=memory_pos  # New parameter passed to layer
+
             )
 
             pred = self.class_embed(output)
@@ -431,11 +474,11 @@ class TransformerDecoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos=None):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, tgt, memory, query_pos=None):
+    def forward(self, tgt, memory, query_pos=None, memory_pos=None):
         # Cross attention
         tgt2, self.cross_attn_weights = self.cross_attn(
             query=self.with_pos_embed(tgt, query_pos),
-            key=memory,
+            key=self.with_pos_embed(memory, memory_pos),
             value=memory
         )
         tgt = tgt + self.dropout2(tgt2)
@@ -485,13 +528,14 @@ class DETR_MultiUser(nn.Module):
         self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
                                            num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
-            d_model=features_dim,  # Matches encoder output feature dimension
+            d_model=features_dim,
             nhead=n_attention_heads,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
             num_queries=num_queries,
-            temp_cross_attention=temp_cross
+            temp_cross_attention=temp_cross, 
+            seq_length=embedding_time_dim
         )
 
     def forward(self, x):
@@ -837,7 +881,7 @@ def run_that_detr(data_train_x,
                 f"test_results/{layer_idx}/precision": layer_metrics['precision'],
                 f"test_results/{layer_idx}/recall": layer_metrics['recall'],
                 f"test_results/{layer_idx}/f1_score": layer_metrics['f1_score']
-            }, step=var_r)  # Use a large offset + repeat index as step
+            }, step=var_r+100000)  # Use a large offset + repeat index as step
 
             print(f"Layer {layer_idx} - %.6fs" % (var_time_2 - var_time_1),
                   "- Total Error %.6f" % layer_metrics['total_error'],
