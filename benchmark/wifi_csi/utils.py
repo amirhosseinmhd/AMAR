@@ -616,11 +616,10 @@ def visualize_model_performance(y_pred, y_true, save_dir="./visualizations",var_
         'perfect_predictions': (np.abs(y_pred - y_true) < 0.5).all(axis=1).mean()
     }
 
-
 def log_attention_weights(model, y_pred, y_actual, epoch):
     """
-    Log attention weights from all decoder layers to wandb based on count of people.
-    For each count (0-4), select one random sample and visualize its attention weights across all decoder layers.
+    Log averaged attention weights from all decoder layers to wandb based on count of people.
+    For each count (0-4), select one random sample and visualize its averaged attention weights across all decoder layers.
     """
     # Convert numpy arrays to torch tensors if needed
     if isinstance(y_actual, np.ndarray):
@@ -656,57 +655,30 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
 
             # Assuming attn_weights shape is now [batch_size, num_heads, target_seq_len, source_seq_len]
             example_attn_weights = attn_weights[random_idx]  # Shape: [num_heads, target_seq_len, source_seq_len]
-            num_heads = example_attn_weights.shape[0]
 
-            # Calculate grid dimensions for subplots
-            grid_size = int(np.ceil(np.sqrt(num_heads)))
-            fig, axes = plt.subplots(grid_size, grid_size, figsize=(20, 18))
-            axes = axes.flatten()
+            # Average attention weights across all heads
+            avg_attn_weights = example_attn_weights.mean(dim=0)  # Shape: [target_seq_len, source_seq_len]
 
-            # Create a heatmap for each attention head
-            for head_idx in range(num_heads):
-                ax = axes[head_idx]
-
-                # Get attention weights for this head
-                head_weights = example_attn_weights[head_idx]
-
-                # Add heatmap
-                sns.heatmap(
-                    head_weights.cpu().numpy(),
-                    cmap='viridis',
-                    xticklabels=range(head_weights.shape[1]) if head_idx >= num_heads - grid_size else False,
-                    yticklabels=[f'Q {j}' for j in
-                                 range(head_weights.shape[0])] if head_idx % grid_size == 0 else False,
-                    ax=ax,
-                    cbar=head_idx == 0  # Only show colorbar for the first plot
-                )
-
-                # Add head title
-                ax.set_title(f'Head {head_idx}', fontsize=10)
-
-                # Only add labels for the bottom and left subplots
-                if head_idx >= num_heads - grid_size:
-                    ax.set_xlabel('Encoder Position', fontsize=8)
-                if head_idx % grid_size == 0:
-                    ax.set_ylabel('Query', fontsize=8)
-
-            # Hide any unused subplots
-            for idx in range(num_heads, grid_size * grid_size):
-                axes[idx].axis('off')
+            # Create a heatmap for the averaged attention weights
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(
+                avg_attn_weights.cpu().numpy(),
+                cmap='viridis',
+                xticklabels=range(avg_attn_weights.shape[1]),
+                yticklabels=[f'Q {j}' for j in range(avg_attn_weights.shape[0])],
+                cbar=True
+            )
 
             # Add main title with sample info
-            plt.suptitle(f'Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
-                         f'Sample Index: {random_idx}\n' +
-                         f'Actual: {actual_sequence}\n' +
-                         f'Prediction: {pred_sequence}',
-                         fontsize=14)
-
-            plt.tight_layout()
-            plt.subplots_adjust(top=0.9)  # Make room for the suptitle
+            plt.title(f'Average Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
+                        f'Sample Index: {random_idx}\n' +
+                        f'Actual: {actual_sequence}\n' +
+                        f'Prediction: {pred_sequence}',
+                        fontsize=14)
 
             # Log to wandb
             wandb.log({
-                f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(fig),
+                f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(plt.gcf()),
             }, step=epoch)
 
             plt.close('all')
