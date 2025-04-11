@@ -449,7 +449,7 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
     new_data_activity = []
     new_data_location = []
 
-    zero = np.zeros((5, 1))
+    zero = np.zeros((num_object_queries, 1))
 
     for i in range(0, data_location.shape[0]):
         sample_location = data_location[i]
@@ -477,7 +477,7 @@ def reduce_dataset_joint(data_activity, data_location, num_object_queries=None):
 
 def reduce_dataset_dualband(data, indicies_, num_object_queries=None):
     new_data = []
-    zero = np.zeros((5, 1))
+    zero = np.zeros((num_object_queries, 1))
 
     for (i, sample) in enumerate(data):
         # Count non-zero rows-pp
@@ -496,7 +496,7 @@ def reduce_dataset_dualband(data, indicies_, num_object_queries=None):
 
 def reduce_dataset(data, num_object_queries=None):
     new_data = []
-    zero = np.zeros((5, 1))
+    zero = np.zeros((num_object_queries, 1))
 
     for sample in data:
         # Count non-zero rows-pp
@@ -508,7 +508,7 @@ def reduce_dataset(data, num_object_queries=None):
         if num_object_queries:
             new_matrix = np.repeat([[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]], num_object_queries-5, axis=0)
             new_sample = np.concatenate((new_sample, new_matrix))
-        indices = np.random.permutation(5)
+        indices = np.random.permutation(num_object_queries)
         new_data.append(new_sample[indices])
     return np.array(new_data)
 
@@ -707,6 +707,6 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
             # Log to wandb
             wandb.log({
                 f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(fig),
-            })
+            }, step=epoch)
 
             plt.close('all')
