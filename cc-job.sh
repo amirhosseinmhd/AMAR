@@ -1,18 +1,18 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=12:30:0
+#SBATCH --time=40:30:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
 #SBATCH --job-name=csi_job
-#SBATCH --output=experiment_results/SLURM_LOG-%j.out
+#SBATCH --output=experiment_results/prev_model-%j.out
 
 mkdir -p $PROJECT_DIR/experiment_results
 
-export OUTFILE_NAME="experiment_results/timeStream_decoder_-${SLURM_JOB_ID}"
+export OUTFILE_NAME="experiment_results/prev_model_-${SLURM_JOB_ID}"
 
-export OUTFILE_NAME="timeStream_decoder_-${SLURM_JOB_ID}"
+export OUTFILE_NAME="prev_model_-${SLURM_JOB_ID}"
 
 # Define important directories
 PROJECT_DIR=/home/amirmhd/projects/def-hinat/amirmhd/multi_modal_CSI
@@ -49,10 +49,10 @@ echo "Python version: $(python --version)"
 # export NUM_DECODER_LAYERS=6
 
 # export TOKEN_LENGTH=100
-export EMBEDDING_DIM=16
-export LABEL_SMOOTHING=0.2 
-export LEARNING_RATE=0.0007
-export WANDB_NAME_=T200_d16_SM02
+# export EMBEDDING_DIM=16
+# export LABEL_SMOOTHING=0.2 
+# export LEARNING_RATE=0.0007
+# export WANDB_NAME_=T200_d16_SM02
 # export MODEL_TYPE=THAT_COUNT 
 # Now we change the preset accordingly
 python config_modifier.py preset.py modified_preset.py
