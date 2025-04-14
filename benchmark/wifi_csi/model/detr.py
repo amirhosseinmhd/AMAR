@@ -1,8 +1,4 @@
-"""
-[file]          detr.py
-[description]   implement and evaluate WiFi-based model Transformer_Encoder
-                https://github.com/windofshadow/THAT
-"""
+
 #
 ##
 import os
