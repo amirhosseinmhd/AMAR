@@ -47,36 +47,9 @@ def load_model_components(model, load_path, lr,  scenario="full", device=None):
             {'params': model.encoder.parameters(), 'lr': lr},
             {'params': model.decoder.parameters(), 'lr': lr}
         ])
-
-    elif scenario == "feature_encoder":
-        # Load feature extractor and encoder, keep decoder random
-        fe_encoder_dict = {k: v for k, v in state_dict.items()
-                           if k.startswith(('feature_extractor.', 'encoder.'))}
-
-        # Load feature extractor
-        feature_extractor_dict = {k.replace('feature_extractor.', ''): v
-                                  for k, v in fe_encoder_dict.items()
-                                  if k.startswith('feature_extractor.')}
-        model.feature_extractor.load_state_dict(feature_extractor_dict)
-
-        # Load encoder
-        encoder_dict = {k.replace('encoder.', ''): v
-                        for k, v in fe_encoder_dict.items()
-                        if k.startswith('encoder.')}
-        model.encoder.load_state_dict(encoder_dict)
-
-        # Freeze feature extractor, small lr for encoder, normal lr for decoder
-        for param in model.feature_extractor.parameters():
-            param.requires_grad = False
-
-        param_groups.extend([
-            {'params': model.encoder.parameters(), 'lr': lr * 0.1},
-            {'params': model.decoder.parameters(), 'lr': lr}
-        ])
-
-    else:
+    else:   
         raise ValueError(f"Unknown scenario: {scenario}")
-
+    print(f"Loaded model components for scenario: {scenario}")
     return model, param_groups
 
 
@@ -97,7 +70,7 @@ def save_model_components(preset, model):
     env = "_".join(preset["data"]["environment"])
     model_ = preset["model"]
     torch.save(model.state_dict(), f"{save_dir}/PT_{env}_{model_}.pth")
-    
+    print(f"Model saved at {save_dir}/PT_{env}_{model_}.pth")
 def error_per_number_person(y_pred, y_true):
     """
     Args:

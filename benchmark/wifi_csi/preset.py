@@ -99,11 +99,11 @@ preset = {
             "e":    [0, 0, 0, 0, 1],
         },
     },
-    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_meeting_room_empty_room_DETR.pth",  # Path to pretrained models
-    "pretrained_path": None,
-    "transfer_scenario": "feature_extractor",  # One of ["full", "feature_extractor", "feature_encoder"]
-    "save_model": True,  # Whether to save model components
-    "saving_path": "results/"
+    "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_empty_room_DETR.pth",
+    # "pretrained_path": None,
+    "transfer_scenario": "full",  # One of ["full", "feature_extractor", "feature_encoder"]
+    "save_model": False,  # Whether to save model components
+    "saving_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/"
 }
 preset["layers_idxs"] = ["layer_" + str(preset["nn"]["num_decoder_layers"] - 1)] #  ["layer_"+str(i) for i in range(7)]
 
