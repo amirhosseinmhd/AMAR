@@ -47,36 +47,9 @@ def load_model_components(model, load_path, lr,  scenario="full", device=None):
             {'params': model.encoder.parameters(), 'lr': lr},
             {'params': model.decoder.parameters(), 'lr': lr}
         ])
-
-    elif scenario == "feature_encoder":
-        # Load feature extractor and encoder, keep decoder random
-        fe_encoder_dict = {k: v for k, v in state_dict.items()
-                           if k.startswith(('feature_extractor.', 'encoder.'))}
-
-        # Load feature extractor
-        feature_extractor_dict = {k.replace('feature_extractor.', ''): v
-                                  for k, v in fe_encoder_dict.items()
-                                  if k.startswith('feature_extractor.')}
-        model.feature_extractor.load_state_dict(feature_extractor_dict)
-
-        # Load encoder
-        encoder_dict = {k.replace('encoder.', ''): v
-                        for k, v in fe_encoder_dict.items()
-                        if k.startswith('encoder.')}
-        model.encoder.load_state_dict(encoder_dict)
-
-        # Freeze feature extractor, small lr for encoder, normal lr for decoder
-        for param in model.feature_extractor.parameters():
-            param.requires_grad = False
-
-        param_groups.extend([
-            {'params': model.encoder.parameters(), 'lr': lr * 0.1},
-            {'params': model.decoder.parameters(), 'lr': lr}
-        ])
-
-    else:
+    else:   
         raise ValueError(f"Unknown scenario: {scenario}")
-
+    print(f"Loaded model components for scenario: {scenario}")
     return model, param_groups
 
 
@@ -97,7 +70,7 @@ def save_model_components(preset, model):
     env = "_".join(preset["data"]["environment"])
     model_ = preset["model"]
     torch.save(model.state_dict(), f"{save_dir}/PT_{env}_{model_}.pth")
-    
+    print(f"Model saved at {save_dir}/PT_{env}_{model_}.pth")
 def error_per_number_person(y_pred, y_true):
     """
     Args:
@@ -646,13 +619,14 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
         # Get actual labels and predictions for this example
         actual_sequence = y_actual[random_idx].cpu().numpy()
         pred_sequence = y_pred[random_idx].cpu().numpy()
-
+        num_layers = len(decoder_layers)
         # Now iterate through layers using the same sample
         for layer_idx, layer in enumerate(decoder_layers):
             attn_weights = layer.cross_attn_weights.detach().clone()
             if attn_weights is None:
                 continue
-
+            if layer_idx != num_layers - 1:
+                continue
             # Assuming attn_weights shape is now [batch_size, num_heads, target_seq_len, source_seq_len]
             example_attn_weights = attn_weights[random_idx]  # Shape: [num_heads, target_seq_len, source_seq_len]
 
@@ -681,4 +655,127 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
                 f'attention_weights/layer_{layer_idx}_people_{i}': wandb.Image(plt.gcf()),
             }, step=epoch)
 
+            plt.close('all')
+    return None
+def log_random_attention_weights_final(model, y_pred, y_actual, epoch, num_samples=50):
+    """
+    Log averaged attention weights from all decoder layers to wandb:
+    1. For 50 randomly selected samples across all counts
+    2. For averaged attention weights per people count (0-5)
+    """
+    # Convert numpy arrays to torch tensors if needed
+    if isinstance(y_actual, np.ndarray):
+        y_actual = torch.from_numpy(y_actual)
+    if isinstance(y_pred, np.ndarray):
+        y_pred = torch.from_numpy(y_pred)
+    
+    # Get total batch size
+    batch_size = y_actual.shape[0]
+    
+    # Count people for each sample
+    where_9_happens = y_actual == 9
+    count_no_person = torch.sum(~where_9_happens, dim=1)
+    
+    decoder_layers = model.decoder.decoder_layers
+    num_layers = len(decoder_layers)
+    # PART 1: Plot random samples
+    # Randomly select indices (up to the requested number or batch size, whichever is smaller)
+    num_to_select = min(num_samples, batch_size)
+    random_indices = torch.randperm(batch_size)[:num_to_select]
+    
+    # For each randomly selected example
+    for sample_idx, random_idx in enumerate(random_indices):
+        # Get actual labels and predictions for this example
+        actual_sequence = y_actual[random_idx].cpu().numpy()
+        pred_sequence = y_pred[random_idx].cpu().numpy()
+        people_count = count_no_person[random_idx].item()
+        
+        # Now iterate through layers using the same sample
+        for layer_idx, layer in enumerate(decoder_layers):
+            attn_weights = layer.cross_attn_weights.detach().clone()
+            if attn_weights is None:
+                continue
+            # Only plotting the last layer
+            if layer_idx != num_layers - 1:
+                continue    
+            # Get attention weights for this example - Shape: [num_heads, target_seq_len, source_seq_len]
+            example_attn_weights = attn_weights[random_idx]
+            
+            # Average attention weights across all heads
+            avg_attn_weights = example_attn_weights.mean(dim=0)  # Shape: [target_seq_len, source_seq_len]
+            
+            # Create a heatmap for the averaged attention weights
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(
+                avg_attn_weights.cpu().numpy(),
+                cmap='viridis',
+                xticklabels=range(avg_attn_weights.shape[1]),
+                yticklabels=[f'Q {j}' for j in range(avg_attn_weights.shape[0])],
+                cbar=True
+            )
+            
+            # Add main title with sample info
+            plt.title(f'Average Cross-Attention Weights - Layer {layer_idx}\n' +
+                    f'Sample {sample_idx+1}/50 (Index: {random_idx}) - People Count: {people_count}\n' +
+                    f'Actual: {actual_sequence}\n' +
+                    f'Prediction: {pred_sequence}',
+                    fontsize=14)
+            
+            # Log to wandb
+            wandb.log({
+                f'random_attention_weights/sample_{sample_idx+1}_layer_{layer_idx}': wandb.Image(plt.gcf()),
+            }, step=epoch)
+            
+            plt.close('all')
+    
+    # PART 2: Plot averaged attention weights per people count
+    # For each possible count (0, 1, 2, 3, 4, 5)
+    for i in range(6):
+        # Find all examples with this count
+        indices = torch.where(count_no_person == i)[0]
+        
+        if len(indices) == 0:
+            continue
+        
+        # Now iterate through layers
+        for layer_idx, layer in enumerate(decoder_layers):
+            attn_weights = layer.cross_attn_weights.detach().clone()
+            if attn_weights is None:
+                continue
+            if layer_idx != num_layers - 1:
+                continue    
+            # Initialize tensor to accumulate attention weights for this count
+            first_sample = attn_weights[indices[0]]
+            accumulated_attn = torch.zeros_like(first_sample.mean(dim=0))
+            
+            # Calculate average attention pattern for all samples with this count
+            for idx in indices:
+                example_attn_weights = attn_weights[idx]
+                # Average attention weights across all heads for this example
+                avg_head_attn = example_attn_weights.mean(dim=0)
+                accumulated_attn += avg_head_attn
+            
+            # Calculate the average across all samples with this count
+            avg_count_attn = accumulated_attn / len(indices)
+            
+            # Create a heatmap for the averaged attention weights
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(
+                avg_count_attn.cpu().numpy(),
+                cmap='viridis',
+                xticklabels=range(avg_count_attn.shape[1]),
+                yticklabels=[f'Q {j}' for j in range(avg_count_attn.shape[0])],
+                cbar=True
+            )
+            
+            # Add main title with count info
+            plt.title(f'Average Cross-Attention Weights - Layer {layer_idx} - {i} People\n' +
+                    f'Averaged across {len(indices)} samples',
+                    fontsize=14)
+            
+            # Log to wandb
+            wandb.log({
+                f'average_attention_weights/count_{i}_layer_{layer_idx}': wandb.Image(plt.gcf()),
+            }, step=epoch)
+            
             plt.close('all')

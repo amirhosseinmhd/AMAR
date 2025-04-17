@@ -121,9 +121,9 @@ def train(model: Module,
             predict_test_y = predict_test_y.detach().cpu().numpy()
 
             dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
-            # Log attention weights every N batches
-        if preset["model"] == "DETR"  and var_epoch % 40 == 0:
-            log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
+        #     # Log attention weights every N batches
+        # if preset["model"] == "DETR"  and var_epoch % 40 == 0:
+        #     log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
         if preset["model"] == "DETR":
             print("*****************")
             print("*****************")

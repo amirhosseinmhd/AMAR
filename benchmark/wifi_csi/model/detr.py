@@ -1,8 +1,4 @@
-"""
-[file]          detr.py
-[description]   implement and evaluate WiFi-based model Transformer_Encoder
-                https://github.com/windofshadow/THAT
-"""
+
 #
 ##
 import os
@@ -101,6 +97,45 @@ class Gaussian_Position(torch.nn.Module):
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
+
+class MemoryPositionalEncoding(nn.Module):
+    """
+    Simple 1D positional encoding for the memory (encoder output)
+    to be used in the decoder's cross-attention mechanism.
+    """
+
+    def __init__(self, d_model, max_seq_len=100, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Create positional encodings once and for all
+        pe = torch.zeros(max_seq_len, d_model)
+        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        # Apply sine to even indices, cosine to odd indices
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # Make pe not a model parameter (we don't need to train it)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, d_model]
+        Returns:
+            Positional encoding to be added to x, same shape as x
+        """
+        # Get positional encoding for the length of the input sequence
+        seq_len = x.size(1)
+        pos_encoding = self.pe[:, :seq_len, :]
+
+        # Broadcast to batch dimension
+        return pos_encoding
+
+
 class Encoder(torch.nn.Module):
     #
     ##
@@ -121,25 +156,19 @@ class Encoder(torch.nn.Module):
         self.layer_dropout_0 = torch.nn.Dropout(0.1)
         #
         ##
-        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, 1e-6)
+        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
         #
-        layer_cnn = []
-        #
-        for var_size in var_size_cnn:
-            #
-            layer = torch.nn.Sequential(torch.nn.Conv1d(var_dim_feature,
-                                                        var_dim_feature,
-                                                        var_size,
-                                                        padding="same"),
-                                        torch.nn.BatchNorm1d(var_dim_feature),
-                                        torch.nn.Dropout(0.1),
-                                        torch.nn.LeakyReLU())
-            layer_cnn.append(layer)
-        #
-        self.layer_cnn = torch.nn.ModuleList(layer_cnn)
+        # Replace CNN layers with a standard FFN√√Dropout
+        self.ffn = torch.nn.Sequential(
+            torch.nn.Linear(var_dim_feature, var_dim_feature),  # Expand dimension (typically 4x)
+            torch.nn.LeakyReLU(),  # Standard activation in modern transformers
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(var_dim_feature, var_dim_feature)  # Project back to original dimension
+        )
         #
         self.layer_dropout_1 = torch.nn.Dropout(0.1)
-
+        # Add layer norm after FFN
+        self.layer_norm_2 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
     #
     ##
     def forward(self,
@@ -151,28 +180,19 @@ class Encoder(torch.nn.Module):
         var_t = self.layer_norm_0(var_t)
         #
         var_t, _ = self.layer_attention(var_t, var_t, var_t)
-
         var_t = self.layer_dropout_0(var_t)
         #
         var_t = var_t + var_input
         #
         ##
         var_s = self.layer_norm_1(var_t)
-
-        var_s = torch.permute(var_s, (0, 2, 1))
-        #
-        var_c = torch.stack([layer(var_s) for layer in self.layer_cnn], dim=0)
-        #
-        var_s = torch.sum(var_c, dim=0) / len(self.layer_cnn)
-        #
+        var_s = self.ffn(var_s)
         var_s = self.layer_dropout_1(var_s)
-
-        var_s = torch.permute(var_s, (0, 2, 1))
-        #
         var_output = var_s + var_t
+        # Apply final layer norm
+        # var_output = self.layer_norm_2(var_output)
         #
         return var_output
-
 
 #
 ##
@@ -262,11 +282,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
             nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
-            nn.Conv1d(128, output_channels, kernel_size=1),
+            nn.Conv1d(128, 64, kernel_size=1),
             nn.ReLU(),
-            # DepthwiseSeparableConv(output_channels, output_channels, kernel_size=5, padding=2),
-            # nn.Conv1d(64, output_channels, kernel_size=1),
-            # nn.ReLU()
+            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
+            nn.Conv1d(64, output_channels, kernel_size=1),
+            nn.ReLU()
             # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
             # nn.Conv1d(32, output_channels, kernel_size=1),
             # nn.ReLU(),
@@ -335,7 +355,7 @@ class Transformer_Encoder(torch.nn.Module):
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
-                 temp_cross_attention=1):
+                 temp_cross_attention=1, seq_length=200):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
@@ -345,6 +365,8 @@ class TransformerDecoder(nn.Module):
         # Create fixed random query embeddings (non-learnable)
         # query_embed = torch.randn(num_queries, d_model)
         # self.register_buffer('query_embed', query_embed)
+
+        self.memory_pos_encoding = MemoryPositionalEncoding(d_model, seq_length, dropout)
 
         # Create decoder layers
         decoder_layer = TransformerDecoderLayer(
@@ -381,9 +403,9 @@ class TransformerDecoder(nn.Module):
         # Initialize decoder input with zero queries
         tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
-        # Get positional queries
+        # Get positions
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
-
+        memory_pos = self.memory_pos_encoding(memory)
         # Store intermediate outputs
         intermediate = []
 
@@ -393,7 +415,9 @@ class TransformerDecoder(nn.Module):
             output = layer(
                 tgt=output,
                 memory=memory,
-                query_pos=query_pos
+                query_pos=query_pos,
+                memory_pos=memory_pos  # New parameter passed to layer
+
             )
 
             pred = self.class_embed(output)
@@ -431,11 +455,11 @@ class TransformerDecoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos=None):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, tgt, memory, query_pos=None):
+    def forward(self, tgt, memory, query_pos=None, memory_pos=None):
         # Cross attention
         tgt2, self.cross_attn_weights = self.cross_attn(
             query=self.with_pos_embed(tgt, query_pos),
-            key=memory,
+            key=self.with_pos_embed(memory, memory_pos),
             value=memory
         )
         tgt = tgt + self.dropout2(tgt2)
@@ -485,13 +509,14 @@ class DETR_MultiUser(nn.Module):
         self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
                                            num_transformer_encoder_layers=4)
         self.decoder = TransformerDecoder(
-            d_model=features_dim,  # Matches encoder output feature dimension
+            d_model=features_dim,
             nhead=n_attention_heads,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
             num_queries=num_queries,
-            temp_cross_attention=temp_cross
+            temp_cross_attention=temp_cross, 
+            seq_length=embedding_time_dim
         )
 
     def forward(self, x):
@@ -726,7 +751,7 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="Final_",
+            project="test",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -892,6 +917,9 @@ def run_that_detr(data_train_x,
     # dict_true_acc = all_layers_results[last_layer]
 
     # Run visualization with the last layer's predictions
+    
+    log_random_attention_weights_final(model_detr, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,
         y_true=data_test_y,
