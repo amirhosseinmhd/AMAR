@@ -51,7 +51,7 @@ def train(model: Module,
     # Initialize early stopping variables
     var_best_f1_score = 0
     var_best_PPP = 0
-    var_best_weight = None
+    var_best_weight = deepcopy(model.state_dict())
     counter = 0  # Counter for patience
 
     if var_mode == "multi_head":
@@ -195,7 +195,7 @@ def train(model: Module,
                   "- Recall %.6f" % dict_error_test['recall'],
                   "- F1 Score %.6f" % dict_error_test['f1_score'])
 
-        if (var_epoch > 280 and dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
+        if (var_epoch > 0 and dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
             var_best_PPP = dict_error_test['perfect_prediction_percentage']
 
             var_best_f1_score = dict_error_test['f1_score']

@@ -6,14 +6,17 @@ import torch
 import json
 import wandb
 import os
+import re
 
-def load_model_components(model, load_path, lr,  scenario="full", device=None):
+
+def load_model_components(model, load_path, lr, scenario="full", device=None):
     """
     Selectively load model components based on scenario from full model state dict
     Args:
         model: DETR_MultiUser model
         load_path: Path to load full model state dict
-        scenario: One of ["full", "feature_extractor", "feature_encoder"]
+        lr: Base learning rate
+        scenario: One of ["full", "feature_extractor", "feature_encoder", "decoder_only"]
         device: torch device
     Returns:
         model: Updated model
@@ -21,10 +24,8 @@ def load_model_components(model, load_path, lr,  scenario="full", device=None):
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     # Load full state dict
     state_dict = torch.load(load_path, map_location=device)
-
     param_groups = []
 
     if scenario == "full":
@@ -37,21 +38,58 @@ def load_model_components(model, load_path, lr,  scenario="full", device=None):
         feature_extractor_dict = {k: v for k, v in state_dict.items()
                                   if k.startswith('feature_extractor.')}
         model.feature_extractor.load_state_dict(
-            {k.replace('feature_extractor.', ''): v
+            {re.sub('^feature_extractor\.', '', k): v
              for k, v in feature_extractor_dict.items()}
         )
+        # Different learning rates for different components
+        param_groups.extend([
+            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr for pretrained component
+            {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr for new components
+            {'params': model.decoder.parameters(), 'lr': lr}
+        ])
 
+    elif scenario == "feature_encoder":
+        # Load feature extractor and encoder, keep decoder random
+        feature_encoder_dict = {k: v for k, v in state_dict.items()
+                                if k.startswith('feature_extractor.') or k.startswith('encoder.')}
+        # Load feature extractor
+        feature_dict = {re.sub('^feature_extractor\.', '', k): v
+                        for k, v in feature_encoder_dict.items()
+                        if k.startswith('feature_extractor.')}
+        model.feature_extractor.load_state_dict(feature_dict)
+        # Load encoder
+        encoder_dict = {re.sub('^encoder\.', '', k): v
+                        for k, v in feature_encoder_dict.items()
+                        if k.startswith('encoder.')}
+        model.encoder.load_state_dict(encoder_dict)
         # Different learning rates for different components
         param_groups.extend([
             {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr
-            {'params': model.encoder.parameters(), 'lr': lr},
-            {'params': model.decoder.parameters(), 'lr': lr}
+            {'params': model.encoder.parameters(), 'lr': lr * 0.1},  # Small lr
+            {'params': model.decoder.parameters(), 'lr': lr}  # Regular lr
         ])
-    else:   
-        raise ValueError(f"Unknown scenario: {scenario}")
+
+    elif scenario == "decoder_only":
+        # Keep feature extractor and encoder random, only load decoder
+        decoder_dict = {k: v for k, v in state_dict.items()
+                        if k.startswith('decoder.')}
+        model.decoder.load_state_dict(
+            {re.sub('^decoder\.', '', k): v
+             for k, v in decoder_dict.items()}
+        )
+        # Different learning rates for different components
+        param_groups.extend([
+            {'params': model.feature_extractor.parameters(), 'lr': lr},  # Regular lr
+            {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr
+            {'params': model.decoder.parameters(), 'lr': lr * 0.1}  # Small lr for pretrained component
+        ])
+
+    else:
+        raise ValueError(
+            f"Unknown scenario: {scenario}. Choose from: 'full', 'feature_extractor', 'feature_encoder', 'decoder_only'")
+
     print(f"Loaded model components for scenario: {scenario}")
     return model, param_groups
-
 
 def save_model_components(preset, model):
     """
