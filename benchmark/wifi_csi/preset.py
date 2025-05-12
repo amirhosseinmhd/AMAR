@@ -65,8 +65,9 @@ preset = {
         "num_decoder_layers": 8,
         "dim_FFN": 512,
         "token_length": 200,
-        "d_embedding": 32,
-        "n_attention_heads": 4
+        "d_embedding": 64,
+        "n_attention_heads": 8,
+        "query_dropout_rate": 0.65
     },
     ## encoding of activities and locations
     "encoding": {

@@ -355,10 +355,11 @@ class Transformer_Encoder(torch.nn.Module):
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
-                 temp_cross_attention=1, seq_length=200):
+                 temp_cross_attention=1, seq_length=200, query_dropout_rate=0.0): 
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
+        self.query_dropout_rate = query_dropout_rate 
 
         # Create activity queries - learnable parameters
         self.query_embed = nn.Parameter(torch.randn(num_queries, d_model))  # 10 object queries
@@ -405,6 +406,23 @@ class TransformerDecoder(nn.Module):
 
         # Get positions
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
+        
+        if self.training and self.query_dropout_rate > 0:
+            num_queries = query_pos.shape[1]
+            num_to_drop = int(num_queries * self.query_dropout_rate)
+            
+            if num_to_drop > 0:
+                # Generate random indices of queries to drop. These indices are the same across the batch.
+                drop_indices = torch.randperm(num_queries, device=query_pos.device)[:num_to_drop]
+                
+                # Create a multiplicative mask
+                # mask will be (num_queries)
+                query_mask = torch.ones(num_queries, device=query_pos.device)
+                query_mask[drop_indices] = 0.0 # Set to 0.0 for dropout
+                
+                # Apply mask by broadcasting: (B, num_queries, d_model) * (1, num_queries, 1)
+                query_pos = query_pos * query_mask.unsqueeze(0).unsqueeze(-1)
+
         memory_pos = self.memory_pos_encoding(memory)
         # Store intermediate outputs
         intermediate = []
@@ -502,7 +520,7 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 class DETR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
         super().__init__()
         self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
         var_embedding_shape = (embedding_time_dim, features_dim)
@@ -516,7 +534,8 @@ class DETR_MultiUser(nn.Module):
             dropout=0.1,
             num_queries=num_queries,
             temp_cross_attention=temp_cross, 
-            seq_length=embedding_time_dim
+            seq_length=embedding_time_dim,
+            query_dropout_rate=query_dropout_rate 
         )
 
     def forward(self, x):
@@ -732,7 +751,8 @@ def run_that_detr(data_train_x,
                                     num_decoder_layers=preset["nn"]["num_decoder_layers"],
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
-                                    dim_feedforward=preset["nn"]["dim_FFN"]),
+                                    dim_feedforward=preset["nn"]["dim_FFN"],
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),
                                                      var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -766,7 +786,8 @@ def run_that_detr(data_train_x,
                                     num_decoder_layers=preset["nn"]["num_decoder_layers"],
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
-                                    dim_feedforward=preset["nn"]["dim_FFN"]).to(device)
+                                    dim_feedforward=preset["nn"]["dim_FFN"],
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]).to(device) 
         # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
