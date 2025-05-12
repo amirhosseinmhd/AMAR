@@ -47,8 +47,8 @@ def update_config_from_env(config):
         config['nn']['d_embedding'] = int(os.environ['EMBEDDING_DIM'])
     if 'TOKEN_LENGTH' in os.environ:
         config['nn']['token_length'] = int(os.environ['TOKEN_LENGTH'])
-    if 'DROP_OUT_RATE' in os.environ:
-        config['nn']['query_dropout_rate'] = float(os.environ['DROP_OUT_RATE'])
+    if 'QUERY_DROP_OUT_RATE' in os.environ:
+        config['nn']['query_dropout_rate'] = float(os.environ['QUERY_DROP_OUT_RATE'])
 
     if 'ENVIRONMENTS_EXP' in os.environ:
         # Split by comma and strip whitespace
