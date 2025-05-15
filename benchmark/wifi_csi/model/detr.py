@@ -1,4 +1,3 @@
-
 #
 ##
 import os
@@ -19,6 +18,78 @@ from preset import preset
 import torch.nn.functional as F
 from utils import *
 import wandb
+from collections import Counter
+
+
+def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state, stratify_axis=1):
+    """
+    Splits data into training and testing sets using stratification based on the sum of data_y along a specified axis.
+    Ensures that data_y is returned in its original form. Handles cases where some patterns occur only once.
+
+    Args:
+        data_x: Features (numpy array).
+        data_y: Labels (numpy array), expected to be multi-dimensional (e.g., m, num_activities, num_people).
+        test_size: Proportion of the dataset to include in the test split.
+        shuffle: Whether or not to shuffle the data before splitting.
+        random_state: Controls the shuffling applied to the data before applying the split.
+        stratify_axis: The axis along which to sum data_y for creating stratification labels.
+                       For data_y with shape (m, num_activities, num_people), summing axis=1
+                       (num_activities) gives patterns of shape (m, num_people).
+
+    Returns:
+        A tuple containing (X_train, X_test, y_train, y_test).
+    """
+    # Sum along the specified axis to get a pattern for stratification.
+    if data_y.ndim <= stratify_axis:
+        raise ValueError(f"stratify_axis {stratify_axis} is out of bounds for data_y with {data_y.ndim} dimensions.")
+    
+    y_summed_patterns = data_y.sum(axis=stratify_axis)[:, :9]
+
+    # Convert each row (pattern) into a hashable type (tuple) for stratification.
+    pattern_tuples = [tuple(pattern) for pattern in y_summed_patterns]
+
+    # Count occurrences of each pattern
+    pattern_counts = Counter(pattern_tuples)
+    
+    # Separate single-occurrence patterns from the rest
+    single_occurrence_indices = [i for i, pattern in enumerate(pattern_tuples) if pattern_counts[pattern] == 1] # i is index in original data?
+    multi_occurrence_indices = [i for i, pattern in enumerate(pattern_tuples) if pattern_counts[pattern] > 1]
+    
+    if len(single_occurrence_indices) > 0:
+        print(f"Found {len(single_occurrence_indices)} samples with unique patterns. Adding to test set.")
+        
+
+        # Extract samples with multi-occurrence patterns for stratified split
+        multi_x = data_x[multi_occurrence_indices]
+        multi_y = data_y[multi_occurrence_indices]
+        multi_patterns = [pattern_tuples[i] for i in multi_occurrence_indices]
+        
+        # Split the multi-occurrence patterns using stratification
+        train_size = 1 - (test_size * len(pattern_tuples) - len(single_occurrence_indices)) / len(multi_patterns)
+        train_size = max(0.1, min(0.9, train_size))  # Keep train_size between 0.1 and 0.9
+        
+        X_train, X_test_strat, y_train, y_test_strat = train_test_split(
+            multi_x, multi_y, 
+            test_size=1-train_size,
+            shuffle=shuffle, 
+            random_state=random_state,
+            stratify=multi_patterns
+        )
+        
+        # Add single-occurrence samples to test set
+        X_test = np.vstack([X_test_strat, data_x[single_occurrence_indices]])
+        y_test = np.vstack([y_test_strat, data_y[single_occurrence_indices]])
+        
+        return X_train, X_test, y_train, y_test
+    else:
+        # If no single-occurrence patterns, perform normal stratified split
+        return train_test_split(
+            data_x, data_y,
+            test_size=test_size,
+            shuffle=shuffle,
+            random_state=random_state,
+            stratify=pattern_tuples
+        )
 
 
 #
@@ -713,18 +784,24 @@ def run_that_detr(data_train_x,
     ##
     ## ============================================ Preprocess ============================================
     #
-    ##
-    data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
-                                                                            test_size=0.5,
-                                                                            shuffle=True,
-                                                                            random_state=39)
+    ## Remove the internal validation split since validation data is now provided directly
+    data_valid_x, new_data_test_x, data_valid_y, new_data_test_y = strat_train_test_split(
+        data_x=data_test_x,
+        data_y=data_test_y,
+        test_size=0.5,
+        shuffle=True,
+        random_state=39,
+        stratify_axis=1  # Sum along the 'num_activities' axis
+    )
+    data_test_x = new_data_test_x
+    data_test_y = new_data_test_y
 
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     ## shape for model
-    var_x_shape, var_y_shape = data_train_x[0].shape, [data_train_y[0].shape[1]]
+    var_x_shape = data_train_x[0].shape
     #
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
     # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
