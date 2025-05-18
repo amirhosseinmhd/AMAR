@@ -275,10 +275,10 @@ class Encoder(torch.nn.Module):
 
 # Depthwise Separable Convolution
 class DepthwiseSeparableConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, padding):
+    def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
         super(DepthwiseSeparableConv, self).__init__()
         self.depthwise = nn.Conv1d(
-            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels
+            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
         )
         self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
 
@@ -303,6 +303,31 @@ class DilatedConvBlock(nn.Module):
         x = self.relu(x)
         return x
 
+class Dilated_Blocks(nn.Module):
+    def __init__(self, output_channels):
+        super().__init__()
+
+        # Parallel dilated convolutions instead of sequential blocks
+        self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
+        self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
+        self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
+        self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
+
+        # 1x1 convolution to combine features (if needed)
+        self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
+
+        self.relu = nn.ReLU()
+    def forward(self, x):
+        # Parallel dilated convolutions
+        out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
+        out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
+        out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
+        out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
+        # Concatenate along channel dimension
+        out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
+
+        return out_concat
+        #
 # Channel Attention Mechanism
 class ChannelAttention(nn.Module):
     def __init__(self, channels, reduction_ratio=8):
@@ -321,66 +346,51 @@ class ChannelAttention(nn.Module):
         y = self.fc(y).view(b, c, 1)
         return x * y
 
-# Non-Local Block for Global Context Modeling
-class NonLocalBlock(nn.Module):
-    def __init__(self, channels):
-        super(NonLocalBlock, self).__init__()
-        self.theta = nn.Conv1d(channels, channels // 2, kernel_size=1)
-        self.phi = nn.Conv1d(channels, channels // 2, kernel_size=1)
-        self.g = nn.Conv1d(channels, channels // 2, kernel_size=1)
-        self.out_conv = nn.Conv1d(channels // 2, channels, kernel_size=1)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x):
-        b, c, t = x.size()
-        theta = self.theta(x).view(b, c // 2, -1)
-        phi = self.phi(x).view(b, c // 2, -1)
-        g = self.g(x).view(b, c // 2, -1)
-        attn = self.softmax(torch.matmul(theta.transpose(1, 2), phi))
-        out = torch.matmul(g, attn.transpose(1, 2))
-        out = self.out_conv(out.view(b, c // 2, t))
-        return x + out
 
 # Backbone Network
 class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=100):
+## The goal is to make this feature extractor from this spatial mapping : 3000->T_1=100 and 270->C_1 to 500-> T_2=10, and 270->C_2
+## The change here is that the model will be instantiated 6 times to match the original output.
+## The model will start at randomly intiallied point in the from time stamp 0 to 250, and then applies -> This is next level of the model
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=50):
         super(CNNFeatureExtractor, self).__init__()
         self.embedding_time_dim = embedding_time_dim
-
+        #T = 500
         # Gradual channel reduction with efficient operations
         self.channel_reduction = nn.Sequential(
             nn.Conv1d(input_channels, 128, kernel_size=1),
             nn.ReLU(),
-            DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
-            nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
+            DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3, stride=2), #500 ->250
+            # nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
             nn.Conv1d(128, 64, kernel_size=1),
             nn.ReLU(),
-            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
-            nn.Conv1d(64, output_channels, kernel_size=1),
-            nn.ReLU()
-            # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
+            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2, stride=2),#250 ->125
+            nn.Conv1d(64, 32, kernel_size=1),
+            nn.ReLU(),
+            DepthwiseSeparableConv(32, output_channels, kernel_size=5, padding=1, stride=5), # 25 tokens
             # nn.Conv1d(32, output_channels, kernel_size=1),
             # nn.ReLU(),
         )
-
+        self.dilated_blocks = Dilated_Blocks(output_channels)
         # Dilated convolution blocks maintain temporal resolution
-        self.dilated_blocks = nn.Sequential(
-            DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
-            DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
-            DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
-            DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
-        )
+        # self.dilated_blocks = nn.Sequential(
+        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
+        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
+        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
+        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
+        # )
 
-        # Final temporal reduction
-        kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
-        self.final_conv = nn.Conv1d(output_channels, output_channels,
-                                  kernel_size=kernel_final, stride=kernel_final)
+        # # Final temporal reduction
+        # kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
+        # self.final_conv = nn.Conv1d(output_channels, output_channels,
+        #                           kernel_size=kernel_final, stride=kernel_final)
 
     def forward(self, x):
+
         x = x.permute(0, 2, 1)  # (batch, channels, time)
         x = self.channel_reduction(x)
         x = self.dilated_blocks(x)
-        x = self.final_conv(x)
+        # x = self.final_conv(x)
         return x.permute(0, 2, 1)  # (batch, time, channels)
 
 
@@ -611,13 +621,13 @@ class DETR_MultiUser(nn.Module):
 
     def forward(self, x):
         # Extracting Features
-        var_embedding = self.feature_extractor(x)
+        var_embedding = torch.concat([ self.feature_extractor(x[:, i*500:(i+1)*500, :]) for i in range(0, 6)]    , dim=1)
+        # var_embedding = self.feature_extractor(x)
 
 
-        memory = self.encoder(var_embedding)  # Shape: (B, 420, 270)
+        memory = self.encoder(var_embedding)
 
-        # Pass through decoder to get predictions from all layers
-        outputs_class = self.decoder(memory)  # Shape: [num_layers + 1, B, num_queries, num_classes]
+        outputs_class = self.decoder(memory)
 
         return outputs_class
 
