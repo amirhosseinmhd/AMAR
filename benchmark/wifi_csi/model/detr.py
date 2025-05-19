@@ -21,7 +21,7 @@ import wandb
 from collections import Counter
 
 
-def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state, stratify_axis=1):
+def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state):
     """
     Splits data into training and testing sets using stratification based on the sum of data_y along a specified axis.
     Ensures that data_y is returned in its original form. Handles cases where some patterns occur only once.
@@ -39,10 +39,9 @@ def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state, str
     Returns:
         A tuple containing (X_train, X_test, y_train, y_test).
     """
+    stratify_axis = 1
     # Sum along the specified axis to get a pattern for stratification.
-    if data_y.ndim <= stratify_axis:
-        raise ValueError(f"stratify_axis {stratify_axis} is out of bounds for data_y with {data_y.ndim} dimensions.")
-    
+
     y_summed_patterns = data_y.sum(axis=stratify_axis)[:, :9]
 
     # Convert each row (pattern) into a hashable type (tuple) for stratification.
@@ -68,7 +67,7 @@ def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state, str
         train_size = 1 - (test_size * len(pattern_tuples) - len(single_occurrence_indices)) / len(multi_patterns)
         train_size = max(0.1, min(0.9, train_size))  # Keep train_size between 0.1 and 0.9
         
-        X_train, X_test_strat, y_train, y_test_strat = train_test_split(
+        X_test, X_test_strat, y_test, y_test_strat = train_test_split(
             multi_x, multi_y, 
             test_size=1-train_size,
             shuffle=shuffle, 
@@ -77,10 +76,10 @@ def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state, str
         )
         
         # Add single-occurrence samples to test set
-        X_test = np.vstack([X_test_strat, data_x[single_occurrence_indices]])
-        y_test = np.vstack([y_test_strat, data_y[single_occurrence_indices]])
+        X_valid = np.vstack([X_test_strat, data_x[single_occurrence_indices]])
+        y_valid = np.vstack([y_test_strat, data_y[single_occurrence_indices]])
         
-        return X_train, X_test, y_train, y_test
+        return X_test, X_valid, y_test, y_valid
     else:
         # If no single-occurrence patterns, perform normal stratified split
         return train_test_split(
@@ -785,16 +784,12 @@ def run_that_detr(data_train_x,
     ## ============================================ Preprocess ============================================
     #
     ## Remove the internal validation split since validation data is now provided directly
-    data_valid_x, new_data_test_x, data_valid_y, new_data_test_y = strat_train_test_split(
+    data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
         data_x=data_test_x,
         data_y=data_test_y,
         test_size=0.5,
         shuffle=True,
-        random_state=39,
-        stratify_axis=1  # Sum along the 'num_activities' axis
-    )
-    data_test_x = new_data_test_x
-    data_test_y = new_data_test_y
+        random_state=39)
 
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
