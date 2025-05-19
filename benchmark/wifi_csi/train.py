@@ -45,10 +45,11 @@ def train(model: Module,
           var_mode: str,
           patience: int = 150):  # Added patience parameter
     var_epoch_saved = 0
-    data_train_loader = DataLoader(data_train_set, var_batch_size, shuffle=True, pin_memory=True)
+    g = torch.Generator()
+    data_train_loader = DataLoader(data_train_set, var_batch_size, shuffle=True, pin_memory=True, generator=g)
     data_test_loader = DataLoader(data_test_set, len(data_test_set))
 
-    # Initialize early stopping variables
+    # Initialize early stopping variables 
     var_best_f1_score = 0
     var_best_PPP = 0
     var_best_weight = deepcopy(model.state_dict())
