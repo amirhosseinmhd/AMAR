@@ -935,43 +935,15 @@ def run_that_detr(data_train_x,
         #
         ##
 
-        layers_idxs = preset["layers_idxs"]
-
+        layers_idxs = ["layer_"+str(i) for i in range(preset["nn"]["num_decoder_layers"])]
+        last_layer_only = True
         # Store results for each layer
         all_layers_results = {}
         dict_layer_acc = performance_metrics(data_test_y, predict_test_y, var_mode=var_mode)
 
         # Process each layer separately
         for idx, layer_idx in enumerate(layers_idxs):
-
             layer_metrics = dict_layer_acc[layer_idx]
-
-            # Log metrics for this layer
-# In the test results section of run_that_detr
-            wandb.log({
-                f"test_results/{layer_idx}/repeat": var_r,
-                f"test_results/{layer_idx}/train_time": var_time_1 - var_time_0,
-                f"test_results/{layer_idx}/test_time": var_time_2 - var_time_1,
-                f"test_results/{layer_idx}/TOTAL_TESTSET_ERROR": layer_metrics['total_error'],
-                f"test_results/{layer_idx}/TOTAL_TESTSET_perfect_prediction_percentage": layer_metrics[
-                    'perfect_prediction_percentage'],
-                f"test_results/{layer_idx}/TOTAL_ACCURACY": layer_metrics['accuracy'],
-                f"test_results/{layer_idx}/mean_count_error": layer_metrics['mean_count_error'],
-                f"test_results/{layer_idx}/error_per_person_1": layer_metrics['error_per_person'][0],
-                f"test_results/{layer_idx}/error_per_person_2": layer_metrics['error_per_person'][1],
-                f"test_results/{layer_idx}/error_per_person_3": layer_metrics['error_per_person'][2],
-                f"test_results/{layer_idx}/error_per_person_4": layer_metrics['error_per_person'][3],
-                f"test_results/{layer_idx}/error_per_person_5": layer_metrics['error_per_person'][4],
-                f"test_results/{layer_idx}/precision": layer_metrics['precision'],
-                f"test_results/{layer_idx}/recall": layer_metrics['recall'],
-                f"test_results/{layer_idx}/f1_score": layer_metrics['f1_score']
-            }, step=var_r+100000)  # Use a large offset + repeat index as step
-
-            print(f"Layer {layer_idx} - %.6fs" % (var_time_2 - var_time_1),
-                  "- Total Error %.6f" % layer_metrics['total_error'],
-                  "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
-
-            # Store the results for each layer
             if var_r == 0:  # Initialize lists on first repeat
                 result_ppp.append([])
                 result_time_train.append([])
@@ -982,8 +954,6 @@ def run_that_detr(data_train_x,
                 result_f1_score.append([])
                 result_avg_count_error.append([])
                 result_accuracy.append([])
-
-            # Append results for this layer
             result_accuracy[idx].append(layer_metrics['accuracy'])
             result_ppp[idx].append(layer_metrics['perfect_prediction_percentage'])
             result_time_train[idx].append(var_time_1 - var_time_0)
@@ -994,7 +964,32 @@ def run_that_detr(data_train_x,
             result_f1_score[idx].append(layer_metrics['f1_score'])
             result_avg_count_error[idx].append(layer_metrics['mean_count_error'])
 
-    # Log average metrics across all layers and repeats
+        if last_layer_only:
+            layer_metrics = dict_layer_acc["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
+            wandb.log({
+                f"test_results/repeat": var_r,
+                f"test_results/train_time": var_time_1 - var_time_0,
+                f"test_results/test_time": var_time_2 - var_time_1,
+                f"test_results/TOTAL_TESTSET_ERROR": layer_metrics['total_error'],
+                f"test_results/TOTAL_TESTSET_perfect_prediction_percentage": layer_metrics[
+                    'perfect_prediction_percentage'],
+                f"test_results/TOTAL_ACCURACY": layer_metrics['accuracy'],
+                f"test_results/mean_count_error": layer_metrics['mean_count_error'],
+                f"test_results/error_per_person_1": layer_metrics['error_per_person'][0],
+                f"test_results/error_per_person_2": layer_metrics['error_per_person'][1],
+                f"test_results/error_per_person_3": layer_metrics['error_per_person'][2],
+                f"test_results/error_per_person_4": layer_metrics['error_per_person'][3],
+                f"test_results/error_per_person_5": layer_metrics['error_per_person'][4],
+                f"test_results/precision": layer_metrics['precision'],
+                f"test_results/recall": layer_metrics['recall'],
+                f"test_results/f1_score": layer_metrics['f1_score']
+            }, step=var_r + 100000)
+
+            print(
+                  "- Total Error %.6f" % layer_metrics['total_error'],
+                  "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
+
+
     for layer_idx_num, layer_idx in enumerate(layers_idxs):
         wandb.log({
             f"test_results/{layer_idx}/avg_PPP": sum(result_ppp[layer_idx_num]) / len(result_ppp[layer_idx_num]),

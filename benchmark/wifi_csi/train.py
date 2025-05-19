@@ -126,9 +126,7 @@ def train(model: Module,
         # if preset["model"] == "DETR"  and var_epoch % 40 == 0:
         #     log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
         if preset["model"] == "DETR":
-            print("*****************")
-            print("*****************")
-            layers_idxs =preset["layers_idxs"]
+            layers_idxs = ["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
             for layer_idx in layers_idxs:
                 layer_metrics = dict_error_test[layer_idx]
                 layer_train_metrics = dict_error_train[layer_idx]
@@ -150,20 +148,15 @@ def train(model: Module,
                 }, 
                 step=var_epoch)
 
-                print(f"Layer {layer_idx} - Epoch {var_epoch}/{var_epochs}",
-                      "- %.6fs" % (time.time() - var_time_e0),
-                      f"- Loss Train %.6f" % var_loss_train.cpu(),
-                      f"- Loss Test %.6f" % var_loss_test.cpu(),
-                      f"- Total Error Train %.6f" % layer_train_metrics['total_error'],
-                      f"- Total Error Test %.6f" % layer_metrics['total_error'],
-                      f"- Perfect Prediction Percentage Train %.6f" % layer_train_metrics[
-                          'perfect_prediction_percentage'],
-                      f"- Perfect Prediction Percentage Test %.6f" % layer_metrics['perfect_prediction_percentage'],
-                      f"- Accuracy Train %.6f" % layer_train_metrics['accuracy'],
-                      f"- Accuracy Test %.6f" % layer_metrics['accuracy'],
-                      f"- Precision %.6f" % layer_metrics['precision'],
-                      f"- Recall %.6f" % layer_metrics['recall'],
-                      f"- F1 Score %.6f" % layer_metrics['f1_score'])
+                if var_epoch % 10 == 0:
+                    print(f"--- Layer {layer_idx} - Epoch {var_epoch}/{var_epochs} ---")
+                    print(f"  Time: {time.time() - var_time_e0:.6f}s")
+                    print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss Test: {var_loss_test.cpu():.6f}")
+                    print(f"  Total Error Train: {layer_train_metrics['total_error']:.6f} | Total Error Test: {layer_metrics['total_error']:.6f}")
+                    print(f"  Perfect Prediction % Train: {layer_train_metrics['perfect_prediction_percentage']:.6f} | Perfect Prediction % Test: {layer_metrics['perfect_prediction_percentage']:.6f}")
+                    print(f"  Accuracy Train: {layer_train_metrics['accuracy']:.6f} | Accuracy Test: {layer_metrics['accuracy']:.6f}")
+                    print(f"  Precision: {layer_metrics['precision']:.6f} | Recall: {layer_metrics['recall']:.6f} | F1 Score: {layer_metrics['f1_score']:.6f}")
+                    print("-" * 30)
         else:
             # Original logging for non-multi_head modes
             wandb.log({
@@ -182,19 +175,15 @@ def train(model: Module,
                 "f1_score": dict_error_test['f1_score']
             }, 
             step=var_epoch)
-            print(f"Epoch {var_epoch}/{var_epochs}",
-                  "- %.6fs" % (time.time() - var_time_e0),
-                  "- Loss Train %.6f" % var_loss_train.cpu(),
-                  "- Loss Test %.6f" % var_loss_test.cpu(),
-                  "- Total Error Train %.6f" % dict_error_train['total_error'],
-                  "- Total Error Test %.6f" % dict_error_test['total_error'],
-                  "- Perfect Prediction Percentage Train %.6f" % dict_error_train['perfect_prediction_percentage'],
-                  "- Perfect Prediction Percentage Test %.6f" % dict_error_test['perfect_prediction_percentage'],
-                  "- Accuracy Train %.6f" % dict_error_train['accuracy'],
-                  "- Accuracy Test %.6f" % dict_error_test['accuracy'],
-                  "- Precision %.6f" % dict_error_test['precision'],
-                  "- Recall %.6f" % dict_error_test['recall'],
-                  "- F1 Score %.6f" % dict_error_test['f1_score'])
+            if var_epoch % 10 == 0:
+                print(f"--- Epoch {var_epoch}/{var_epochs} ---")
+                print(f"  Time: {time.time() - var_time_e0:.6f}s")
+                print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss Test: {var_loss_test.cpu():.6f}")
+                print(f"  Total Error Train: {dict_error_train['total_error']:.6f} | Total Error Test: {dict_error_test['total_error']:.6f}")
+                print(f"  Perfect Prediction % Train: {dict_error_train['perfect_prediction_percentage']:.6f} | Perfect Prediction % Test: {dict_error_test['perfect_prediction_percentage']:.6f}")
+                print(f"  Accuracy Train: {dict_error_train['accuracy']:.6f} | Accuracy Test: {dict_error_test['accuracy']:.6f}")
+                print(f"  Precision: {dict_error_test['precision']:.6f} | Recall: {dict_error_test['recall']:.6f} | F1 Score: {dict_error_test['f1_score']:.6f}")
+                print("-" * 30)
 
         if (var_epoch > 0 and dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
             var_best_PPP = dict_error_test['perfect_prediction_percentage']
