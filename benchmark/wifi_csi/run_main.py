@@ -7,9 +7,10 @@
 import json
 import argparse
 from logging import raiseExceptions
-
+import random # Added
 import numpy as np
 from sklearn.model_selection import train_test_split
+import torch # Added
 #
 from model import *
 from preset import preset
@@ -93,6 +94,14 @@ def run():
     [description]
     : run WiFi-based models
     """
+    SEED = 103 
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     #
     ## parse arguments from input
     var_args = parse_args()
