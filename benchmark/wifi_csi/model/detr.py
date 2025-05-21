@@ -349,13 +349,20 @@ class CNNFeatureExtractor(nn.Module):
         # Gradual channel reduction with efficient operations
         self.channel_reduction = nn.Sequential(
             nn.Conv1d(input_channels, 128, kernel_size=1),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             DepthwiseSeparableConv(128, 128, kernel_size=7, padding=3),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
             nn.MaxPool1d(kernel_size=3, stride=3),  # Temp: 3000 -> 1000
             nn.Conv1d(128, 64, kernel_size=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
             nn.Conv1d(64, output_channels, kernel_size=1),
+            nn.BatchNorm1d(output_channels),
             nn.ReLU()
             # DepthwiseSeparableConv(32, 32, kernel_size=3, padding=1),
             # nn.Conv1d(32, output_channels, kernel_size=1),
@@ -374,12 +381,16 @@ class CNNFeatureExtractor(nn.Module):
         kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
         self.final_conv = nn.Conv1d(output_channels, output_channels,
                                   kernel_size=kernel_final, stride=kernel_final)
+        self.final_bn = nn.BatchNorm1d(output_channels)
+        self.final_relu = nn.ReLU()
 
     def forward(self, x):
         x = x.permute(0, 2, 1)  # (batch, channels, time)
         x = self.channel_reduction(x)
         x = self.dilated_blocks(x)
         x = self.final_conv(x)
+        x = self.final_bn(x)
+        x = self.final_relu(x)
         return x.permute(0, 2, 1)  # (batch, time, channels)
 
 
@@ -784,13 +795,17 @@ def run_that_detr(data_train_x,
     ## ============================================ Preprocess ============================================
     #
     ## Remove the internal validation split since validation data is now provided directly
-    data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
-        data_x=data_test_x,
-        data_y=data_test_y,
-        test_size=0.5,
-        shuffle=True,
-        random_state=39)
+    # data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
+    #     data_x=data_test_x,
+    #     data_y=data_test_y,
+    #     test_size=0.5,
+    #     shuffle=True,
+    #     random_state=39)
 
+    data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
+                                                                            test_size=0.5,
+                                                                            shuffle=True,
+                                                                            random_state=39)
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
