@@ -348,53 +348,102 @@ class ChannelAttention(nn.Module):
 
 # Backbone Network
 class CNNFeatureExtractor(nn.Module):
-## The goal is to make this feature extractor from this spatial mapping : 3000->T_1=100 and 270->C_1 to 500-> T_2=10, and 270->C_2
-## The change here is that the model will be instantiated 6 times to match the original output.
-## The model will start at randomly intiallied point in the from time stamp 0 to 250, and then applies -> This is next level of the model
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=50):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
         super(CNNFeatureExtractor, self).__init__()
         self.embedding_time_dim = embedding_time_dim
-        #T = 200
-        # Gradual channel reduction with efficient operations
-        self.channel_reduction = nn.Sequential(
-            nn.Conv1d(input_channels, 128, kernel_size=1),
-            nn.ReLU(),
-            DepthwiseSeparableConv(128, 128, kernel_size=5, padding=2, stride=2), #500 ->250
-            nn.Conv1d(128, 64, kernel_size=1),
-            nn.ReLU(),
-            DepthwiseSeparableConv(64, 64, kernel_size=5, padding=2, stride=1),#250 ->250
-            nn.Conv1d(64, output_channels, kernel_size=1),
-            nn.ReLU(),
-            # DepthwiseSeparableConv(64, output_channels, kernel_size=5, padding=1, stride=1), # 125 tokens
-            # nn.Conv1d(64, output_channels, kernel_size=1),
-            # nn.ReLU(),
-        )
 
+        c_initial = 128  # Channels after initial convolution
+        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
 
+        # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
+        self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
+        self.bn_initial = nn.BatchNorm1d(c_initial)
+        self.relu_initial = nn.ReLU()
+        
+        self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
+        self.bn_ds1 = nn.BatchNorm1d(c_initial)
+        self.relu_ds1 = nn.ReLU()
 
-        self.dilated_blocks = Dilated_Blocks(output_channels)
-        # Dilated convolution blocks maintain temporal resolution
-        # self.dilated_blocks = nn.Sequential(
-        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=1),
-        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=2),
-        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=4),
-        #     DilatedConvBlock(output_channels, output_channels, dilation_rate=8),
-        # )
-        # self.chanel_attention = ChannelAttention(output_channels)
-        # # Final temporal reduction
-        # kernel_final = 1000 // embedding_time_dim  # 1000/100 = 10
-        # self.final_conv = nn.Conv1d(output_channels, output_channels,
-        #                           kernel_size=kernel_final, stride=kernel_final)
+        # 2. Hierarchical Dilated Convolutions (on T=100)
+        # Input: (B, c_initial, 100)
+        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
+        # Reduce channels in the last hierarchical block
+        self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4) 
+        # Output: (B, c_hierarchical_out, 100)
+
+        # 3. Second Temporal Reduction (T: 100 -> 50)
+        # Input: (B, c_hierarchical_out, 100)
+        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
+        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+        self.relu_ds2 = nn.ReLU()
+        # Output: (B, c_hierarchical_out, 50)
+
+        # 4. Channel Adjustment to output_channels (T: 50)
+        # Input: (B, c_hierarchical_out, 50)
+        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+        self.bn_adjust = nn.BatchNorm1d(output_channels)
+        self.relu_adjust = nn.ReLU()
+        # Output: (B, output_channels, 50)
+
+        # 5. Parallel Dilated Convolutions (on T=50)
+        # Input: (B, output_channels, 50)
+        self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
+        self.bn_parallel = nn.BatchNorm1d(output_channels)
+        self.relu_parallel = nn.ReLU()
+        # Output: (B, output_channels, 50)
+
+        # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
+        # Input: (B, output_channels, 50)
+        current_T = 50
+        target_T = 10
+        
+        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+                                              kernel_size=5, stride=5, padding=2)
+        self.bn_final = nn.BatchNorm1d(output_channels)
+        self.relu_final = nn.ReLU()
+        # Output: (B, output_channels, embedding_time_dim)
 
     def forward(self, x):
+        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+        x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
 
-        x = x.permute(0, 2, 1)  # (batch, channels, time)
-        x = self.channel_reduction(x)
-        x = self.dilated_blocks(x)
-        # x = self.channel_attention(x) # Apply ChannelAttention
+        # 1. Initial Processing & First Temporal Reduction
+        x = self.initial_conv(x) #d from 270 ->128
+        x = self.bn_initial(x)
+        x = self.relu_initial(x)
+        
+        x = self.ds_conv1(x) # T: 200 -> 100
+        x = self.bn_ds1(x)
+        x = self.relu_ds1(x)
 
-        # x = self.final_conv(x)
-        return x.permute(0, 2, 1)  # (batch, time, channels)
+        # 2. Hierarchical Dilated Convolutions
+        x = self.hierarchical_dilated_1(x)
+        x = self.hierarchical_dilated_2(x)
+        x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
+
+        # 3. Second Temporal Reduction
+        x = self.ds_conv2(x) # T: 100 -> 50
+        x = self.bn_ds2(x)
+        x = self.relu_ds2(x)
+
+        # 4. Channel Adjustment
+        x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
+        x = self.bn_adjust(x)
+        x = self.relu_adjust(x)
+        
+        # 5. Parallel Dilated Convolutions
+        x = self.parallel_dilated_blocks(x)
+        x = self.bn_parallel(x)
+        x = self.relu_parallel(x)
+
+        # 6. Final Temporal Reduction
+        x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
+        x = self.bn_final(x)
+        x = self.relu_final(x)
+        
+        # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
+        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
 class Transformer_Encoder(torch.nn.Module):
