@@ -879,13 +879,17 @@ def run_that_detr(data_train_x,
     ## ============================================ Preprocess ============================================
     #
     ## Remove the internal validation split since validation data is now provided directly
-    data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
-        data_x=data_test_x,
-        data_y=data_test_y,
-        test_size=0.5,
-        shuffle=True,
-        random_state=39)
+    # data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
+    #     data_x=data_test_x,
+    #     data_y=data_test_y,
+    #     test_size=0.5,
+    #     shuffle=True,
+    #     random_state=39)
 
+    data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
+                                                                            test_size=0.5,
+                                                                            shuffle=True,
+                                                                            random_state=39)
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
