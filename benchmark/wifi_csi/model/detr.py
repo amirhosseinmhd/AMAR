@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from utils import *
 import wandb
 from collections import Counter
+import itertools # Ensure itertools is imported
 
 
 def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state):
