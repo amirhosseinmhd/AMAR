@@ -43,7 +43,7 @@ def load_model_components(model, load_path, lr, scenario="full", device=None):
         )
         # Different learning rates for different components
         param_groups.extend([
-            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr for pretrained component
+            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.0001},  # Very small lr for pretrained component
             {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr for new components
             {'params': model.decoder.parameters(), 'lr': lr}
         ])
@@ -57,6 +57,9 @@ def load_model_components(model, load_path, lr, scenario="full", device=None):
                         for k, v in feature_encoder_dict.items()
                         if k.startswith('feature_extractor.')}
         model.feature_extractor.load_state_dict(feature_dict)
+        # # Freeze feature extractor parameters
+        # for param in model.feature_extractor.parameters():
+        #     param.requires_grad = False
         # Load encoder
         encoder_dict = {re.sub('^encoder\.', '', k): v
                         for k, v in feature_encoder_dict.items()
@@ -64,7 +67,9 @@ def load_model_components(model, load_path, lr, scenario="full", device=None):
         model.encoder.load_state_dict(encoder_dict)
         # Different learning rates for different components
         param_groups.extend([
-            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr
+            # feature_extractor parameters are frozen, so not included here
+            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},
+            # Very small lr for pretrained component
             {'params': model.encoder.parameters(), 'lr': lr * 0.1},  # Small lr
             {'params': model.decoder.parameters(), 'lr': lr}  # Regular lr
         ])
