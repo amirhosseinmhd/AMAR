@@ -689,6 +689,13 @@ class DETR_MultiUser(nn.Module):
 
         # Apply feature extractor once on the batched segments
         extracted_features = self.feature_extractor(x_batched)
+
+        # If the feature extractor is frozen (e.g., its parameters do not require gradients),
+        # detach its output. This prevents unnecessary gradient computations for the frozen part
+        # and can save memory. We check a representative parameter's requires_grad status.
+        if not self.feature_extractor.initial_conv.weight.requires_grad:
+            extracted_features = extracted_features.detach()
+        
         # extracted_features will have shape:
         # (batch_size * num_segments, T_out_segment, features_dim)
         # where T_out_segment is the time dimension output by feature_extractor for one segment,
