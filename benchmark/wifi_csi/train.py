@@ -78,6 +78,13 @@ def train(model: Module,
         model.train()
         total_batches = len(data_train_loader)
 
+        # Adjust learning rate for feature_extractor after 50 epochs
+        if var_epoch == 50 and not preset.get("pretrained_path"):
+            for param_group in optimizer.param_groups:
+                if param_group.get('name') == 'feature_extractor':
+                    param_group['lr'] /= 5
+                    print(f"Reduced LR for feature_extractor to {param_group['lr']} at epoch {var_epoch}")
+
         for batch_idx, data_batch in enumerate(data_train_loader):
             data_batch_x, data_batch_y = data_batch
             data_batch_x = data_batch_x.to(device)
