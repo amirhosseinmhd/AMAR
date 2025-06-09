@@ -42,7 +42,7 @@ class Predictor(nn.Module):
         self.input_proj = nn.Linear(self.encoder_d_model, self.predictor_d_model)
         self.pos_encoder = nn.Embedding(self.max_total_tokens_in_view, self.predictor_d_model)
 
-        predictor_encoder_layer = nn.TransformerEncoder(
+        predictor_encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.predictor_d_model,
             nhead=config["predictor_attention_heads"],
             batch_first=True,
@@ -158,26 +158,35 @@ class SegmentBlockSampler(nn.Module):
     """
     Samples target blocks and determines context segments for JEPA.
     Ensures that target blocks are contiguous sets of segments and context segments are disjoint from target segments.
+    Outputs segment indices (for data extraction) and token indices (as tensors for positional encoding and loss),
+    including a padding mask for context tokens.
     """
-    def __init__(self, total_segments_in_view, num_target_blocks, target_block_size_segments):
+    def __init__(self, total_segments_in_view, num_target_blocks, target_block_size_segments, tokens_per_segment):
         super().__init__()
-        self.total_segments_in_view = total_segments_in_view          # Total number of segments available in the current view.
-        self.num_target_blocks = num_target_blocks                    # Number of distinct target blocks to sample.
-        self.target_block_size_segments = target_block_size_segments  # Number of segments in each target block.
+        self.total_segments_in_view = total_segments_in_view
+        self.num_target_blocks = num_target_blocks
+        self.target_block_size_segments = target_block_size_segments
+        self.tokens_per_segment = tokens_per_segment
+        self.tokens_per_target_block = self.target_block_size_segments * self.tokens_per_segment
 
-    def forward(self, batch_size):
+    def forward(self, batch_size, device=torch.device("cpu")): # Added device for tensor creation
         # Stores lists of segment indices for target blocks for each item in the batch.
-        # Outer list is batch, inner list is for num_target_blocks, innermost list contains segment indices for a block.
-        batch_target_segment_indices_for_loss = []
+        batch_target_segment_indices_for_loss_list = []
         # Stores lists of segment indices for context for each item in the batch.
-        batch_context_segment_indices_for_online_encoder = []
+        batch_context_segment_indices_for_online_encoder_list = []
+
+        # Stores lists of token indices for target blocks (before converting to tensor).
+        batch_target_token_indices_list_of_lists = []
+        # Stores lists of token indices for context (before converting to tensor).
+        batch_context_token_indices_list_of_lists = []
+
+        max_context_tokens_for_batch = 0
 
         for _ in range(batch_size):
-            # Generate all possible segment indices for the current view.
             all_possible_segment_indices = list(range(self.total_segments_in_view))
-
-            current_target_blocks_segments_for_item = [] # Stores segment indices for each target block for the current batch item.
-            union_of_target_segments_for_item = set()    # Keeps track of all segments assigned to target blocks.
+            current_target_blocks_segments_for_item = []
+            current_target_blocks_tokens_for_item_list = [] # List of lists (tokens per block)
+            union_of_target_segments_for_item = set()
 
             # Sample `num_target_blocks` target blocks.
             for _ in range(self.num_target_blocks):
@@ -188,19 +197,67 @@ class SegmentBlockSampler(nn.Module):
                 # Define the segments belonging to this block.
                 block_segments = list(range(start_segment, start_segment + self.target_block_size_segments))
                 current_target_blocks_segments_for_item.append(block_segments)
-                # Add segments of the current block to the union set.
                 union_of_target_segments_for_item.update(block_segments)
+
+                # Convert segment indices to token indices for this block
+                block_token_indices = []
+                for seg_idx in block_segments:
+                    start_token = seg_idx * self.tokens_per_segment
+                    block_token_indices.extend(range(start_token, start_token + self.tokens_per_segment))
+                current_target_blocks_tokens_for_item_list.append(block_token_indices)
 
             # Context segments are those not included in any target block.
             context_segments_for_item = [s for s in all_possible_segment_indices if
                                          s not in union_of_target_segments_for_item]
+            
+            # Convert context segment indices to token indices
+            context_token_indices_for_item = []
+            for seg_idx in context_segments_for_item:
+                start_token = seg_idx * self.tokens_per_segment
+                context_token_indices_for_item.extend(range(start_token, start_token + self.tokens_per_segment))
+            
+            if len(context_token_indices_for_item) > max_context_tokens_for_batch:
+                max_context_tokens_for_batch = len(context_token_indices_for_item)
 
-            batch_target_segment_indices_for_loss.append(current_target_blocks_segments_for_item)
-            batch_context_segment_indices_for_online_encoder.append(context_segments_for_item)
+            batch_target_segment_indices_for_loss_list.append(current_target_blocks_segments_for_item)
+            batch_context_segment_indices_for_online_encoder_list.append(context_segments_for_item)
+            batch_target_token_indices_list_of_lists.append(current_target_blocks_tokens_for_item_list)
+            batch_context_token_indices_list_of_lists.append(context_token_indices_for_item)
+
+        # Convert context token indices to padded tensor and create mask
+        # Using 0 as padding_value, assuming 0 is a valid index but will be masked.
+        # Mask is True for padded elements.
+        context_token_indices_tensor = torch.full(
+            (batch_size, max_context_tokens_for_batch), 0, dtype=torch.long, device=device
+        )
+        context_padding_mask_tensor = torch.ones(
+            (batch_size, max_context_tokens_for_batch), dtype=torch.bool, device=device
+        )
+
+        for i, item_tokens_list in enumerate(batch_context_token_indices_list_of_lists):
+            if item_tokens_list: # if not empty
+                num_tokens = len(item_tokens_list)
+                context_token_indices_tensor[i, :num_tokens] = torch.tensor(item_tokens_list, dtype=torch.long, device=device)
+                context_padding_mask_tensor[i, :num_tokens] = False
+        
+        # Convert target token indices to tensor
+        # Shape: (batch_size, num_target_blocks, tokens_per_target_block)
+        target_block_token_indices_tensor = torch.zeros(
+            (batch_size, self.num_target_blocks, self.tokens_per_target_block), dtype=torch.long, device=device
+        )
+        for i, item_blocks_list in enumerate(batch_target_token_indices_list_of_lists):
+            for block_idx, block_tokens_list in enumerate(item_blocks_list):
+                if len(block_tokens_list) != self.tokens_per_target_block:
+                    raise ValueError(f"Sampler generated a target block with {len(block_tokens_list)} tokens, "
+                                     f"but expected {self.tokens_per_target_block} tokens.")
+                target_block_token_indices_tensor[i, block_idx, :] = torch.tensor(block_tokens_list, dtype=torch.long, device=device)
 
         return {
-            "target_block_segment_indices_for_loss": batch_target_segment_indices_for_loss,
-            "context_segment_indices_for_online_encoder": batch_context_segment_indices_for_online_encoder,
+            "target_block_segment_indices_for_loss": batch_target_segment_indices_for_loss_list,
+            "context_segment_indices_for_online_encoder": batch_context_segment_indices_for_online_encoder_list,
+            "context_token_indices_tensor": context_token_indices_tensor,
+            "context_padding_mask_tensor": context_padding_mask_tensor,
+            "target_block_token_indices_tensor": target_block_token_indices_tensor,
         }
 
 
@@ -246,11 +303,12 @@ class JEPA_Model(nn.Module):
         self.sampler = SegmentBlockSampler(
             total_segments_in_view=config["num_segments_total_view"],
             num_target_blocks=config["num_target_blocks"],
-            target_block_size_segments=config["target_block_size_segments"]
+            target_block_size_segments=config["target_block_size_segments"],
+            tokens_per_segment=self.tokens_per_segment # Pass tokens_per_segment
         )
         # Predictor module (currently a placeholder).
         # This will take context representations and predict target representations.
-        self.predictor = nn.Identity()
+        self.predictor = Predictor(config=config)
 
     @torch.no_grad()
     def _update_ema(self):
@@ -279,92 +337,111 @@ class JEPA_Model(nn.Module):
         # Shape: (num_chosen_segments_for_item, self.config["segment_length"], self.config["input_channels"]).
 
         segments_to_extract = [] #  here we make a list of segments, each item in list correspond to one segment.
+        # Ensure segment_indices_list_for_item is not empty and contains valid indices
+        if not segment_indices_list_for_item:
+             return torch.empty(0, self.config["segment_length"], self.config["input_channels"],
+                               device=x_item_full_view.device)
+
         for seg_idx in segment_indices_list_for_item:
             start_ts = seg_idx * self.config["segment_length"]
             end_ts = start_ts + self.config["segment_length"]
             segments_to_extract.append(x_item_full_view[start_ts:end_ts, :])
 
-        if not segments_to_extract:  # Handle cases like an empty context.
+        if not segments_to_extract:  # Handle cases like an empty context (already handled above, but good for safety).
             return torch.empty(0, self.config["segment_length"], self.config["input_channels"],
                                device=x_item_full_view.device)
 
         return torch.stack(segments_to_extract, dim=0)
 
-    def _get_tokens_and_mask_for_context(self, x_full_view_batch, list_of_context_segment_indices, cnn_extractor,
+    def _get_tokens_for_context(self, x_full_view_batch,
+                                         list_of_context_segment_indices, # Still needed for _extract_segments_from_x
+                                         sampled_context_token_indices_tensor,
+                                         sampled_context_padding_mask_tensor,
+                                         cnn_extractor,
                                          transformer_encoder):
-        # x_full_view_batch: Batch of full processing windows.
-        # Shape: (batch_size, self.config["num_segments_total_view"] * self.config["segment_length"], self.config["input_channels"]).
-        # list_of_context_segment_indices: List (length batch_size) of lists of context segment indices for each item.
-        # cnn_extractor: The online CNN feature extractor.
-        # transformer_encoder: The online Transformer encoder.
+        # x_full_view_batch: (batch_size, total_view_len, input_channels)
+        # list_of_context_segment_indices: List (batch_size) of lists of segment indices.
+        # sampled_context_token_indices_tensor: Tensor (batch_size, max_context_tokens_in_batch) - original token indices, padded.
+        # sampled_context_padding_mask_tensor: Tensor (batch_size, max_context_tokens_in_batch) - True for padded.
+        # cnn_extractor: Online CNN.
+        # transformer_encoder: Online Transformer.
         # Output:
-        #   context_tokens_encoded: Context tokens after CNN and Transformer. Shape: (batch_size, max_context_tokens_in_batch, self.config["cnn_output_channels"]).
-        #   context_padding_mask: Boolean mask for padded context tokens. Shape: (batch_size, max_context_tokens_in_batch).
+        #   context_tokens_encoded: (batch_size, max_context_tokens_in_batch, cnn_output_channels)
+        #   context_padding_mask: (batch_size, max_context_tokens_in_batch) - this is sampled_context_padding_mask_tensor
+        #   padded_context_original_indices: (batch_size, max_context_tokens_in_batch) - this is sampled_context_token_indices_tensor
 
         batch_size = x_full_view_batch.shape[0]
-        all_extracted_cnn_tokens_batch = []
-        all_original_token_indices_batch = [] # Stores lists of original token indices for each batch item
-        max_context_tokens_in_batch = 0
+        all_extracted_cnn_tokens_batch = [] # List of tensors, one per batch item (variable token lengths)
+        
+        # This is now the definitive max length for context tokens in this batch
+        max_context_tokens_in_batch = sampled_context_token_indices_tensor.shape[1]
 
         for i in range(batch_size):
             x_item_full_view = x_full_view_batch[i]
-            item_context_segment_indices = list_of_context_segment_indices[i]
+            item_context_segment_indices = list_of_context_segment_indices[i] # Segment indices for extraction
+            
+            num_actual_tokens_for_item_i = (~sampled_context_padding_mask_tensor[i]).sum().item()
 
-            if not item_context_segment_indices:
+            if not item_context_segment_indices: # If no segments, then no tokens
+                if num_actual_tokens_for_item_i != 0:
+                    raise ValueError(f"Item {i} has no context segments but sampler mask indicates "
+                                     f"{num_actual_tokens_for_item_i} tokens.")
                 all_extracted_cnn_tokens_batch.append(
                     torch.empty(0, self.config["cnn_output_channels"], device=x_item_full_view.device))
-                all_original_token_indices_batch.append(
-                    torch.empty(0, dtype=torch.long, device=x_item_full_view.device))
                 continue
-
+            
             segments_for_cnn_item = self._extract_segments_from_x(x_item_full_view, item_context_segment_indices)
+            
+            if segments_for_cnn_item.numel() == 0:
+                 if num_actual_tokens_for_item_i != 0:
+                    raise ValueError(f"Item {i} has empty extracted segments but sampler mask indicates "
+                                     f"{num_actual_tokens_for_item_i} tokens.")
+                 all_extracted_cnn_tokens_batch.append(
+                    torch.empty(0, self.config["cnn_output_channels"], device=x_item_full_view.device))
+                 continue
+
             cnn_tokens_item = cnn_extractor(segments_for_cnn_item) # (num_segs, tokens_per_seg, channels)
-
-            num_item_context_segments = cnn_tokens_item.shape[0]
-            num_item_context_tokens = num_item_context_segments * self.tokens_per_segment
+            num_item_context_tokens_from_cnn = cnn_tokens_item.shape[0] * cnn_tokens_item.shape[1]
+            
+            # Check consistency between CNN output and sampler's mask
+            if num_item_context_tokens_from_cnn != num_actual_tokens_for_item_i:
+                raise ValueError(
+                    f"Mismatch in token counts for item {i}: CNN produced {num_item_context_tokens_from_cnn} tokens, "
+                    f"but sampler's mask indicates {num_actual_tokens_for_item_i} actual tokens. "
+                    f"Context segments: {item_context_segment_indices}"
+                )
+            
             all_extracted_cnn_tokens_batch.append(
-                cnn_tokens_item.reshape(num_item_context_tokens, self.config["cnn_output_channels"]))
-##################################################################################################OPTIMIZE HERE##############
-            # They just collect token ids based on Segment numebr!
-            # Collect original token indices for this item's context tokens
-            current_item_original_indices = []
-            for seg_idx_in_context_list in item_context_segment_indices: # seg_idx_in_context_list is the original segment index
-                start_original_token_idx = seg_idx_in_context_list * self.tokens_per_segment
-                for k in range(self.tokens_per_segment):
-                    current_item_original_indices.append(start_original_token_idx + k)
-            all_original_token_indices_batch.append(
-                torch.tensor(current_item_original_indices, dtype=torch.long, device=x_item_full_view.device))
+                cnn_tokens_item.reshape(num_item_context_tokens_from_cnn, self.config["cnn_output_channels"]))
 
-            if num_item_context_tokens > max_context_tokens_in_batch:
-                max_context_tokens_in_batch = num_item_context_tokens
-
-        # Pad context token sequences to max_context_tokens_in_batch for batch processing by the Transformer.
-        # padded_context_tokens shape: (batch_size, max_context_tokens_in_batch, self.config["cnn_output_channels"])
-        # context_padding_mask shape: (batch_size, max_context_tokens_in_batch); True indicates a padded position.
+        # Pad the extracted CNN tokens to max_context_tokens_in_batch
+        # This tensor holds the actual token embeddings.
         padded_context_tokens = torch.zeros(batch_size, max_context_tokens_in_batch, self.config["cnn_output_channels"],
-                                            device=x_full_view_batch.device)
-        # Pad with a valid index (e.g., 0); these positions will be masked out by context_padding_mask.
-        padded_context_original_indices = torch.zeros(batch_size, max_context_tokens_in_batch, dtype=torch.long,
-                                                     device=x_full_view_batch.device)
-        context_padding_mask = torch.ones(batch_size, max_context_tokens_in_batch, dtype=torch.bool,
-                                          device=x_full_view_batch.device)
+                                            device=x_full_view_batch.device, dtype=all_extracted_cnn_tokens_batch[0].dtype if all_extracted_cnn_tokens_batch and all_extracted_cnn_tokens_batch[0].numel() > 0 else torch.float)
+
 
         for i in range(batch_size):
-            tokens_item = all_extracted_cnn_tokens_batch[i]
-            original_indices_item = all_original_token_indices_batch[i]
-            seq_len = tokens_item.shape[0]
+            tokens_item = all_extracted_cnn_tokens_batch[i] # This is a tensor of shape (num_actual_tokens_for_item_i, cnn_output_channels)
+            seq_len = tokens_item.shape[0] # This is num_actual_tokens_for_item_i
             if seq_len > 0:
+                # We place the actual tokens at the beginning, matching how the mask and indices are structured
                 padded_context_tokens[i, :seq_len, :] = tokens_item
-                padded_context_original_indices[i, :seq_len] = original_indices_item
-                context_padding_mask[i, :seq_len] = False
+        
+        # The original indices and the padding mask are now directly from the sampler
+        padded_context_original_indices = sampled_context_token_indices_tensor
+        context_padding_mask = sampled_context_padding_mask_tensor
 
         if max_context_tokens_in_batch == 0:
-            return padded_context_tokens, padded_context_original_indices, context_padding_mask
+            # Return tensors with correct batch_size but 0 sequence length if no context tokens in batch
+             return (padded_context_tokens, # (B, 0, D)
+                    context_padding_mask,           # (B, 0)
+                    padded_context_original_indices) # (B, 0)
+
 
         context_tokens_encoded = transformer_encoder(padded_context_tokens,
                                                      token_original_indices=padded_context_original_indices,
                                                      src_key_padding_mask=context_padding_mask)
-        return context_tokens_encoded, context_padding_mask # Return mask, original indices not needed by caller here
+        return context_tokens_encoded 
 
     def _process_full_view_for_target_encoder(self, x_full_view_batch, cnn_extractor, transformer_encoder):
         # x_full_view_batch: Batch of full processing windows.
@@ -413,24 +490,22 @@ class JEPA_Model(nn.Module):
                                                  src_key_padding_mask=None)
         return all_tokens_encoded
 
-    def _prepare_target_tokens_for_loss(self, batch_size, device, sampling_info_segments, z_target_ema_all_tokens):
+    def _prepare_target_tokens_for_loss(self, batch_size, device,
+                                         target_block_token_indices_tensor, # Tensor (B, num_target_blocks, tokens_per_block)
+                                         z_target_ema_all_tokens):
         """
      Prepares the actual target token representations for the loss calculation.
     These are selected from z_target_ema_all_tokens using the sampled target_block_segment_indices.
     Optimized to return torch tensors instead of nested lists.
     
-    This method extracts the specific token representations that correspond to the target blocks
-    sampled during the JEPA training process. It serves as the "ground truth" that the context
-    encoder's predictions will be compared against during loss computation.
-    
     Args:
         batch_size (int): Number of samples in the current batch
         device (torch.device): Device to place tensors on (CPU/GPU)
-        sampling_info_segments (list): Contains metadata about sampled target blocks,
-                                     including their positions and indices
-        z_target_ema_all_tokens (torch.Tensor): Complete set of target representations
-                                               from the EMA target encoder, shape:
-                                               (batch_size, total_tokens, embed_dim)
+        target_block_token_indices_tensor (torch.Tensor): Tensor of absolute token indices for each target block.
+                                                              Shape: (batch_size, num_target_blocks, tokens_per_block).
+            z_target_ema_all_tokens (torch.Tensor): Complete set of target representations
+                                                   from the EMA target encoder, shape:
+                                                   (batch_size, total_tokens, embed_dim)
     
     Returns:
         torch.Tensor: Selected target token representations corresponding to the sampled
@@ -460,32 +535,42 @@ class JEPA_Model(nn.Module):
         )
         
         for i in range(batch_size):
-            for block_idx, block_segment_indices in enumerate(sampling_info_segments["target_block_segment_indices_for_loss"][i]):
-                if not block_segment_indices:
-                    # Fill with zeros for empty blocks (shouldn't happen with proper sampling)
-                    actual_targets_tensor[i, block_idx] = 0
-                    continue
-
-                first_segment_in_block = block_segment_indices[0]
-                last_segment_in_block = block_segment_indices[-1]
-
-                # Calculate token indices for the entire block
-                final_slice_start = first_segment_in_block * self.tokens_per_segment
-                block_end_token_idx_exclusive = (last_segment_in_block + 1) * self.tokens_per_segment
+            for block_idx in range(self.config["num_target_blocks"]):
+                # Get the token indices for the current block for item i
+                # These are absolute token indices, e.g., [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+                # for a block of 2 segments with 5 tokens each.
+                current_block_token_indices = target_block_token_indices_tensor[i, block_idx, :] # Shape: (tokens_per_block)
                 
-                # Ensure slice indices are within bounds
-                max_token_idx_available = z_target_ema_all_tokens.shape[1]
-                final_slice_end = min(max_token_idx_available, block_end_token_idx_exclusive)
-
-                if final_slice_start < final_slice_end:
-                    # Select tokens for the current block using a single slice
-                    selected_block_tokens = z_target_ema_all_tokens[i, final_slice_start:final_slice_end, :]
-                    actual_targets_tensor[i, block_idx] = selected_block_tokens
-                else:
-                    raise ValueError(
-                        f"Invalid slice for target block: start {final_slice_start}, end {final_slice_end} "
-                        f"for item {i} in batch with max token index {max_token_idx_available}"
+                if not current_block_token_indices.numel() > 0 : # Should not happen if tokens_per_block > 0
+                     actual_targets_tensor[i, block_idx] = torch.zeros(
+                        tokens_per_block, cnn_output_channels,
+                        device=device, dtype=z_target_ema_all_tokens.dtype
                     )
+                     continue
+
+                # Since tokens within a block are contiguous as per sampler logic:
+                # First token index in the block
+                final_slice_start = current_block_token_indices[0].item()
+                # Last token index in the block + 1 for exclusive slicing
+                final_slice_end = current_block_token_indices[-1].item() + 1
+                
+                # Verify that the number of tokens derived from slice matches tokens_per_block
+                if (final_slice_end - final_slice_start) != tokens_per_block:
+                    raise ValueError(
+                        f"Slice length {final_slice_end - final_slice_start} does not match tokens_per_block {tokens_per_block} "
+                        f"for item {i}, block {block_idx}. Indices: {current_block_token_indices.tolist()}"
+                    )
+
+                max_token_idx_available = z_target_ema_all_tokens.shape[1]
+                if final_slice_start >= max_token_idx_available or final_slice_end > max_token_idx_available or final_slice_start < 0:
+                     raise ValueError(
+                        f"Invalid token slice for target block: start {final_slice_start}, end {final_slice_end} "
+                        f"for item {i}, block {block_idx} with max token index {max_token_idx_available-1}. "
+                        f"Token indices in block: {current_block_token_indices.tolist()}"
+                    )
+
+                selected_block_tokens = z_target_ema_all_tokens[i, final_slice_start:final_slice_end, :]
+                actual_targets_tensor[i, block_idx] = selected_block_tokens
         
         return actual_targets_tensor
 
@@ -512,9 +597,14 @@ class JEPA_Model(nn.Module):
         x_full_view_of_segments = x_raw_input[:, t_init: t_init + required_len, :]
 
         # --- Step 1: Sample segment indices for context and target blocks ---
-        sampling_info_segments = self.sampler(batch_size, device)
-        # sampling_info_segments["context_segment_indices_for_online_encoder"]: List (batch_size) of lists of context segment indices.
-        # sampling_info_segments["target_block_segment_indices_for_loss"]: List (batch_size) of lists of lists for target block segment indices.
+        # Sampler now also returns token indices as tensors and context padding mask
+        sampling_info = self.sampler(batch_size, device=device) # Pass device for tensor creation in sampler
+        # sampling_info keys:
+        # "context_segment_indices_for_online_encoder": List (B) of lists (segment_indices)
+        # "target_block_segment_indices_for_loss": List (B) of lists (num_blocks) of lists (segment_indices_per_block)
+        # "context_token_indices_tensor": Tensor (B, max_context_len)
+        # "context_padding_mask_tensor": Tensor (B, max_context_len)
+        # "target_block_token_indices_tensor": Tensor (B, num_target_blocks, tokens_per_block)
 
         # --- Step 2: Process Full View with Target Encoder (EMA Path) ---
         # This generates representations for all possible tokens in the view using the target encoder.
@@ -525,32 +615,33 @@ class JEPA_Model(nn.Module):
                 self.target_transformer_encoder
             )
             # z_target_ema_all_tokens shape: (batch_size, self.max_total_tokens_in_view, self.config["cnn_output_channels"])
+        # --- Prepare actual target token representations for the loss ---
+        actual_targets_for_loss = self._prepare_target_tokens_for_loss(
+            batch_size,
+            device,
+            sampling_info["target_block_token_indices_tensor"], # Use tensor of token indices
+            z_target_ema_all_tokens
+        )
+        context_original_indices, context_padding_mask = sampling_info["context_token_indices_tensor"], sampling_info["context_padding_mask_tensor"]
 
         # --- Step 3: Process Context Segments with Online Encoder (Online Path) ---
-        # Only the sampled context segments are fed into the online CNN and Transformer.
-        z_context_online, context_padding_mask = self._get_tokens_and_mask_for_context(
+        z_context_online = self._get_tokens_for_context(
             x_full_view_of_segments,
-            sampling_info_segments["context_segment_indices_for_online_encoder"],  # Process only context segments.
+            sampling_info["context_segment_indices_for_online_encoder"],  # Original segment indices for data extraction
+            context_original_indices,
+            context_padding_mask,
             self.online_cnn_feature_extractor,
             self.online_transformer_encoder
         )
-        # z_context_online shape: (batch_size, num_context_tokens_padded, self.config["cnn_output_channels"])
-        # context_padding_mask shape: (batch_size, num_context_tokens_padded)
-
-        # --- Step 4: Prepare actual target token representations for the loss ---
-        actual_targets_for_loss_list = self._prepare_target_tokens_for_loss(
-            batch_size,
-            device,
-            sampling_info_segments,
-            z_target_ema_all_tokens
-        )
+        # z_context_online shape: (batch_size, max_context_tokens_in_batch, self.config["cnn_output_channels"])
+        # context_padding_mask shape: (batch_size, max_context_tokens_in_batch)
+        # context_original_indices shape: (batch_size, max_context_tokens_in_batch)
 
         return {
             "z_context_online": z_context_online,
-            "context_padding_mask": context_padding_mask,
-            "actual_targets_for_loss_list": actual_targets_for_loss_list,
+            "actual_targets_for_loss": actual_targets_for_loss, # Renamed from actual_targets_for_loss_list
             "z_target_ema_all_tokens": z_target_ema_all_tokens,
-            "sampling_info_segments": sampling_info_segments
+            "sampling_info": sampling_info # Renamed from sampling_info_segments
         }
 
     def update_ema(self):
@@ -559,79 +650,68 @@ class JEPA_Model(nn.Module):
 
 
 # --- Conceptual Training Loop Snippet ---
-def train_jepa_one_epoch(jepa_model, dataloader, optimizer, device, config): # config here is JEPA_CONFIG
+import torch.nn.functional as F
+
+
+def train_jepa_one_epoch(jepa_model, dataloader, optimizer, device, config):
     jepa_model.train()
     total_loss = 0
-    for batch_idx, (data_batch_x, _) in enumerate(dataloader):  # Assuming y (labels) is not used for JEPA pre-training.
+    for batch_idx, (data_batch_x, _) in enumerate(dataloader):
         data_batch_x = data_batch_x.to(device)
-
         optimizer.zero_grad()
 
-        # Forward pass through JEPA model.
+        # Forward pass through the main JEPA model
         jepa_outputs = jepa_model(data_batch_x)
 
-        # Extract necessary outputs for predictor and loss.
+        # Extract outputs
         z_context_online = jepa_outputs["z_context_online"]
-        context_padding_mask = jepa_outputs["context_padding_mask"]
+        actual_targets_for_loss = jepa_outputs["actual_targets_for_loss"]
+        sampling_info = jepa_outputs["sampling_info"]
+        context_padding_mask = sampling_info["context_padding_mask_tensor"]
+        context_original_indices = sampling_info["context_token_indices_tensor"]
 
-        """
-        # z_context_online shape: This is the tokens that come out of the context encoder.
-        These tokens are padded to some amount to make the computation more optimized. This padded amount is the maximum token length in the batch. So th
-         Size of z_context_online is (batch_size, num_context_tokens_padded, self.config["cnn_output_channels"]), where num_context_tokens_padded was the maximum size.
-        # context_padding_mask shape: (batch_size, num_context_tokens_padded)
-        context_padding_mask This helps you to find which tokens are redundant and padded here.
-        """
-        actual_targets_for_loss_list = jepa_outputs["actual_targets_for_loss_list"] #torch.Size([batchSize, Num_targetBlocks, Num_Tokens, 40])
-        # z_target_ema_all_tokens = jepa_outputs["z_target_ema_all_tokens"] # Available if needed
+        # Check for empty context, which can happen in rare sampling cases
+        if z_context_online.shape[1] == 0:
+            continue
 
-        # --- Placeholder for Predictor Call and Loss Calculation ---
-        # The actual predictor would take z_context_online, context_padding_mask,
-        # and some form of target block queries/positions.
-        # It would output predictions for each of the config["num_target_blocks"].
-        # The loss (e.g., MSE) would then be computed between these predictions
-        # and the corresponding tensors in actual_targets_for_loss_list.
+        # --- Efficient Prediction via Batching ---
 
-        # Example of a simplified dummy loss (replace with actual predictor + loss logic):
-        # This dummy loss just ensures the network runs and uses some outputs.
-        # It arbitrarily tries to predict the first few tokens of the first target block using first few context tokens.
-        num_dummy_tokens = 10
-        if num_dummy_tokens > 0:
-            # Taking first batch item, first target block for simplicity in dummy loss.
-            dummy_pred = jepa_model.predictor(z_context_online[:, :num_dummy_tokens, :]) # Predictor needs to be adapted
-            # For a real predictor, it would predict all target blocks.
-            # Here, assume predictor just returns input for simplicity if it's nn.Identity
-            dummy_target = actual_targets_for_loss_list[0][0][:num_dummy_tokens, :].detach().unsqueeze(0) # Add batch dim for single item
+        b, num_blocks, tokens_per_block, d = actual_targets_for_loss.shape
 
-            # Ensure dummy_pred and dummy_target are compatible for loss
-            # If predictor is nn.Identity, dummy_pred could be (batch_size, num_dummy_tokens, feature_dim)
-            # dummy_target is (1, num_dummy_tokens, feature_dim)
-            # We need to make them align or sum losses per batch item.
-            # For this placeholder, let's just use the first item of the batch for both.
-            loss = F.mse_loss(dummy_pred[0], dummy_target.squeeze(0))
+        # 1. Reshape targets to fold the 'num_blocks' dimension into the batch dimension
+        target_indices = sampling_info["target_block_token_indices_tensor"].reshape(b * num_blocks, tokens_per_block)
+        actual_targets = actual_targets_for_loss.reshape(b * num_blocks, tokens_per_block, d)
 
-        else:
-            loss = torch.tensor(0.0, device=device, requires_grad=True) # No tokens to compare
+        # 2. Expand context to match the new batch dimension
+        expanded_context = z_context_online.repeat_interleave(repeats=num_blocks, dim=0)
+        expanded_context_mask = context_padding_mask.repeat_interleave(repeats=num_blocks, dim=0)
+        expanded_context_indices = context_original_indices.repeat_interleave(repeats=num_blocks, dim=0)
 
+        # 3. Perform a single forward pass with the larger batch
+        predictions = jepa_model.predictor(
+            expanded_context,
+            expanded_context_mask,
+            target_indices,
+            expanded_context_indices
+        )
+
+        # 4. Calculate loss
+        loss = F.mse_loss(predictions, actual_targets)
 
         loss.backward()
         optimizer.step()
-
-        # Update EMA weights of the target encoder.
         jepa_model.update_ema()
 
         total_loss += loss.item()
+        # (Optional: logging logic)
 
-        if batch_idx % 50 == 0:
-            print(f"JEPA Train Batch {batch_idx}/{len(dataloader)}, Loss: {loss.item():.4f}")
-
-    avg_loss = total_loss / len(dataloader)
+    avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
     print(f"JEPA Epoch Average Loss: {avg_loss:.4f}")
     return avg_loss
-
-
 if __name__ == '__main__':
     print("Running conceptual JEPA test...")
-
+    torch.manual_seed(0)
+    np.random.seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1. Instantiate Model using JEPA_CONFIG
@@ -670,19 +750,31 @@ if __name__ == '__main__':
         outputs = jepa_model(sample_input)
         print("\nSample JEPA model output keys:", list(outputs.keys()))
         print(f"Shape of z_context_online: {outputs['z_context_online'].shape}")
-        print(f"Shape of context_padding_mask: {outputs['context_padding_mask'].shape}")
         print(f"Shape of z_target_ema_all_tokens: {outputs['z_target_ema_all_tokens'].shape}")
 
-        # Inspecting sampling info (segment indices)
-        print("Sampling info (segments) for first batch item:")
-        print(f"  Context segment indices: {outputs['sampling_info_segments']['context_segment_indices_for_online_encoder'][0]}")
-        print(f"  Target block 0 segment indices: {outputs['sampling_info_segments']['target_block_segment_indices_for_loss'][0][0]}")
+
+        # Inspecting sampling info (segments and tokens) for first batch item:
+        print("Sampling info (first batch item):")
+        print(f"  Context segment indices: {outputs['sampling_info']['context_segment_indices_for_online_encoder'][0][:5]}... (first 5)")
+        # Accessing tensor data for printing
+        print(f"  Context token indices (tensor shape): {outputs['sampling_info']['context_token_indices_tensor'].shape}")
+        print(f"  Context token indices (first item, first 10): {outputs['sampling_info']['context_token_indices_tensor'][0, :10].tolist()}")
+        print(f"  Context padding mask (tensor shape): {outputs['sampling_info']['context_padding_mask_tensor'].shape}")
+        print(f"  Context padding mask (first item, first 10): {outputs['sampling_info']['context_padding_mask_tensor'][0, :10].tolist()}")
+        
+        if outputs['sampling_info']['target_block_segment_indices_for_loss'][0]:
+            print(f"  Target block 0 segment indices: {outputs['sampling_info']['target_block_segment_indices_for_loss'][0][0]}")
+            print(f"  Target block token indices (tensor shape): {outputs['sampling_info']['target_block_token_indices_tensor'].shape}")
+            print(f"  Target block 0 token indices (first item, block 0, first 10): {outputs['sampling_info']['target_block_token_indices_tensor'][0, 0, :10].tolist()}")
+
 
         # Inspecting actual target tokens for loss for the first batch item, first target block
-        if outputs['actual_targets_for_loss_list'] and outputs['actual_targets_for_loss_list'][0]:
-            first_target_block_tokens = outputs['actual_targets_for_loss_list'][0][0]
+        if outputs['actual_targets_for_loss'].nelement() > 0 and \
+           outputs['actual_targets_for_loss'].shape[0] > 0 and \
+           outputs['actual_targets_for_loss'].shape[1] > 0:
+            first_target_block_tokens = outputs['actual_targets_for_loss'][0][0]
             print(f"Shape of actual tokens for first target block (item 0): {first_target_block_tokens.shape}")
-            # This shape would be (num_tokens_in_block, JEPA_CONFIG["cnn_output_channels"])
-            # where num_tokens_in_block = JEPA_CONFIG["target_block_size_segments"] * JEPA_CONFIG["cnn_embedding_time_dim"]
+            # This shape would be (tokens_per_block, JEPA_CONFIG["cnn_output_channels"])
+            # where tokens_per_block = JEPA_CONFIG["target_block_size_segments"] * JEPA_CONFIG["cnn_embedding_time_dim"]
         else:
-            print("Actual targets for loss list is empty or first block is missing for item 0.")
+            print("Actual targets for loss tensor is empty or first block is missing for item 0.")
