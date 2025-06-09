@@ -1,3 +1,5 @@
+
+
 #
 ##
 import os
@@ -13,6 +15,12 @@ from ptflops import get_model_complexity_info
 from itertools import permutations
 from sklearn.metrics import classification_report, accuracy_score
 from scipy.optimize import linear_sum_assignment
+import sys
+modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
+
+if modules_path not in sys.path:
+    sys.path.insert(0, modules_path) # Insert at the beginning to prioritize it
+
 from train import train
 from preset import preset
 import torch.nn.functional as F
@@ -677,12 +685,26 @@ class DETR_MultiUser(nn.Module):
 
         # Optimized version:
         batch_size = x.shape[0]
-        num_segments = 15
-        segment_length = 200
+        num_segments = 29
+
+        segment_length = 100
         input_channels = x.shape[2]
 
         # Reshape x for batch processing of all segments by the feature_extractor
-        # Assuming x has shape (batch_size, num_segments * segment_length, input_channels)
+        # Randomly select start position only during training
+
+        t_init = np.random.randint(0, segment_length)  # Random starting point when training
+
+        t_final = t_init + num_segments * segment_length  # Calculate the end point
+        
+        # Ensure we don't go out of bounds
+        if t_final > x.shape[1]:
+            raise ValueError(f"t_final {t_final} exceeds input length {x.shape[1]}. Adjust segment_length or num_segments.")
+            # t_init = max(0, x.shape[1] - num_segments * segment_length)
+            # t_final = t_init + num_segments * segment_length
+            
+        x = x[:, t_init:t_final, :]  # Extract the segments
+
         # e.g., (batch_size, 3000, input_channels)
         # We reshape it to (batch_size * num_segments, segment_length, input_channels)
         # e.g., (batch_size * 15, 200, input_channels)
