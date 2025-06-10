@@ -17,7 +17,7 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 2,
+    "repeat": 1,
     ## path of data
     "path": {
         "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
@@ -42,9 +42,9 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 5e-4,                                     # learning rate
-        "epoch": 400,                                   # number of epochs
-        "batch_size": 16,                              # batch size
+        "lr": 4e-4,                                     # learning rate
+        "epoch": 170,                                   # number of epochs
+        "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
@@ -61,13 +61,13 @@ preset = {
         },
         "cross_attention_temp": 1,
         "weight_decay": 2e-4,
-        "num_obj_queries": 7,
-        "num_decoder_layers": 8,
+        "num_obj_queries": 6,
+        "num_decoder_layers": 5,
         "dim_FFN": 512,
-        "token_length": 200,
-        "d_embedding": 64,
-        "n_attention_heads": 8,
-        "query_dropout_rate": 0.65
+        "token_length": 145,
+        "d_embedding": 40,
+        "n_attention_heads": 5,
+        "query_dropout_rate": 0.0
     },
     ## encoding of activities and locations
     "encoding": {
@@ -100,12 +100,11 @@ preset = {
             "e":    [0, 0, 0, 0, 1],
         },
     },
-    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_empty_room_DETR.pth",
+    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_meeting_room_classroom_DETR.pth",
     "pretrained_path": None,
-    "transfer_scenario": "full",  # One of ["full", "feature_extractor", "feature_encoder"]
+    "transfer_scenario": "feature_encoder",  # One of ["full", "feature_extractor", "feature_encoder"]
     "save_model": False,  # Whether to save model components
     "saving_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/"
 }
-preset["layers_idxs"] = ["layer_" + str(preset["nn"]["num_decoder_layers"] - 1)] #  ["layer_"+str(i) for i in range(7)]
 
 

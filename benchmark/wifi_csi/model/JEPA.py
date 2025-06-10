@@ -3,32 +3,238 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import time
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.manifold import TSNE
+import pandas as pd
 import copy # For deepcopying model for EMA
 from detr import CNNFeatureExtractor # Assuming CNNFeatureExtractor is in detr.py
 # Transformer_Encoder is defined locally in this file for JEPA-specific use.
+import torch.nn.functional as F
 
+#
+##
+import os
+import math
+import time
+import torch
+import numpy as np
+from sklearn.model_selection import train_test_split
+#
+import torch.nn as nn
+from torch.utils.data import TensorDataset
+from ptflops import get_model_complexity_info
+from itertools import permutations
+from sklearn.metrics import classification_report, accuracy_score
+from scipy.optimize import linear_sum_assignment
+import sys
+modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
+
+if modules_path not in sys.path:
+    sys.path.insert(0, modules_path) # Insert at the beginning to prioritize it
+
+from train import train
+from preset import preset
+import torch.nn.functional as F
+from utils import *
+import wandb
+from collections import Counter
+import itertools # Ensure itertools is imported
 # Configuration dictionary for JEPA model parameters.
 # These values would typically be managed in a centralized configuration system (e.g., preset file).
+
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
+        super(DepthwiseSeparableConv, self).__init__()
+        self.depthwise = nn.Conv1d(
+            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
+        )
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+
+# Dilated Convolution Block
+class DilatedConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation_rate):
+        super(DilatedConvBlock, self).__init__()
+        self.conv = nn.Conv1d(
+            in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
+        )
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        return x
+
+class Dilated_Blocks(nn.Module):
+    def __init__(self, output_channels):
+        super().__init__()
+
+        # Parallel dilated convolutions instead of sequential blocks
+        self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
+        self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
+        self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
+        self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
+
+        # 1x1 convolution to combine features (if needed)
+        self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
+
+        self.relu = nn.ReLU()
+    def forward(self, x):
+        # Parallel dilated convolutions
+        out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
+        out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
+        out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
+        out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
+        # Concatenate along channel dimension
+        out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
+
+        return out_concat
+        #
+# Channel Attention Mechanism
+class ChannelAttention(nn.Module):
+    def __init__(self, channels, reduction_ratio=8):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(channels // reduction_ratio, channels),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        b, c, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        return x * y
+
+
+
 JEPA_CONFIG = {
+    "num_epochs":300,
     "input_channels": 270,              # Number of input features for the time series data.
     "segment_length": 100,              # Number of timestamps in each segment.
     "num_segments_total_view": 29,      # Total number of segments considered in a single processing view.
-    "cnn_output_channels": 40,          # Number of output channels from the CNNFeatureExtractor (feature dimension per token).
+    "cnn_output_channels": 128,          # Number of output channels from the CNNFeatureExtractor (feature dimension per token).
     "cnn_embedding_time_dim": 5,        # Number of tokens generated by CNNFeatureExtractor for each segment.
     "encoder_attention_heads": 4,       # Number of attention heads in the Transformer Encoder.
     "encoder_layers": 4,                # Number of layers in the Transformer Encoder.
-    "ema_decay": 0.996,                 # Decay rate for the Exponential Moving Average of target encoder weights.
-    "num_target_blocks": 6,             # Number of target blocks to sample and predict.
-    "target_block_size_segments": 4,    # Number of contiguous segments forming a single target block.
+    "ema_decay": 0.998,                 # Decay rate for the Exponential Moving Average of target encoder weights.
+    "num_target_blocks": 4,             # Number of target blocks to sample and predict.
+    "target_block_size_segments": 7,    # Number of contiguous segments forming a single target block.
 
     # --- Predictor Specific Configurations ---
     # The "narrow" dimension of the predictor's internal Transformer.
-    "predictor_d_model": 32,
+    "predictor_d_model": 128,
     "predictor_attention_heads": 4,       # Number of attention heads in the Predictor's Transformer.
-    "predictor_layers": 2,                # Number of layers in the Predictor's Transformer.
+    "predictor_layers": 4,                # Number of layers in the Predictor's Transformer.
 }
 
+class CNNFeatureExtractor(nn.Module):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
+        super(CNNFeatureExtractor, self).__init__()
+        self.embedding_time_dim = embedding_time_dim
 
+        c_initial = 128  # Channels after initial convolution
+        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
+
+        # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
+        self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
+        self.bn_initial = nn.BatchNorm1d(c_initial)
+        self.relu_initial = nn.ReLU()
+        
+        self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
+        self.bn_ds1 = nn.BatchNorm1d(c_initial)
+        self.relu_ds1 = nn.ReLU()
+
+        # 2. Hierarchical Dilated Convolutions (on T=100)
+        # Input: (B, c_initial, 100)
+        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
+        # Reduce channels in the last hierarchical block
+        self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4) 
+        # Output: (B, c_hierarchical_out, 100)
+
+        # 3. Second Temporal Reduction (T: 100 -> 50)
+        # Input: (B, c_hierarchical_out, 100)
+        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
+        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+        self.relu_ds2 = nn.ReLU()
+        # Output: (B, c_hierarchical_out, 50)
+
+        # 4. Channel Adjustment to output_channels (T: 50)
+        # Input: (B, c_hierarchical_out, 50)
+        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+        self.bn_adjust = nn.BatchNorm1d(output_channels)
+        self.relu_adjust = nn.ReLU()
+        # Output: (B, output_channels, 50)
+
+        # 5. Parallel Dilated Convolutions (on T=50)
+        # Input: (B, output_channels, 50)
+        self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
+        self.bn_parallel = nn.BatchNorm1d(output_channels)
+        self.relu_parallel = nn.ReLU()
+        # Output: (B, output_channels, 50)
+
+        # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
+        # Input: (B, output_channels, 50)
+        current_T = 50
+        target_T = 10
+        
+        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+                                              kernel_size=5, stride=5, padding=2)
+        self.bn_final = nn.BatchNorm1d(output_channels)
+        self.relu_final = nn.ReLU()
+        # Output: (B, output_channels, embedding_time_dim)
+
+    def forward(self, x):
+        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+        x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
+
+        # 1. Initial Processing & First Temporal Reduction
+        x = self.initial_conv(x) #d from 270 ->128
+        x = self.bn_initial(x)
+        x = self.relu_initial(x)
+        
+        x = self.ds_conv1(x) # T: 200 -> 100
+        x = self.bn_ds1(x)
+        x = self.relu_ds1(x)
+
+        # 2. Hierarchical Dilated Convolutions
+        x = self.hierarchical_dilated_1(x)
+        x = self.hierarchical_dilated_2(x)
+        x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
+
+        # 3. Second Temporal Reduction
+        x = self.ds_conv2(x) # T: 100 -> 50
+        x = self.bn_ds2(x)
+        x = self.relu_ds2(x)
+
+        # 4. Channel Adjustment
+        x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
+        x = self.bn_adjust(x)
+        x = self.relu_adjust(x)
+        
+        # 5. Parallel Dilated Convolutions
+        x = self.parallel_dilated_blocks(x)
+        x = self.bn_parallel(x)
+        x = self.relu_parallel(x)
+
+        # 6. Final Temporal Reduction
+        x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
+        x = self.bn_final(x)
+        x = self.relu_final(x)
+        
+        # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
+        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 class Predictor(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -310,6 +516,40 @@ class JEPA_Model(nn.Module):
         # This will take context representations and predict target representations.
         self.predictor = Predictor(config=config)
 
+    @torch.no_grad()
+    def extract_representations(self, x_raw_input):
+        """
+        Extracts fixed-size representations for a batch of input data using the target encoder.
+        The representation is the mean of all tokens from the full view.
+        """
+        self.eval() # Ensure the model is in evaluation mode
+        
+        # 1. Prepare the input view, same as in the forward pass
+        required_len = self.config["num_segments_total_view"] * self.config["segment_length"]
+        if x_raw_input.shape[1] < required_len:
+            # Pad the input if it's too short
+            padding_needed = required_len - x_raw_input.shape[1]
+            x_raw_input = F.pad(x_raw_input, (0, 0, 0, padding_needed), 'replicate')
+
+        # Use a fixed center crop for consistent representation extraction
+        max_t_init = x_raw_input.shape[1] - required_len
+        t_init = max_t_init // 2 if max_t_init >= 0 else 0
+        x_full_view = x_raw_input[:, t_init : t_init + required_len, :]
+
+        # 2. Process the full view with the target encoder
+        all_tokens_encoded = self._process_full_view_for_target_encoder(
+            x_full_view,
+            self.target_cnn_feature_extractor,
+            self.target_transformer_encoder
+        )
+        # all_tokens_encoded shape: (batch_size, num_tokens, feature_dim)
+
+        # 3. Average the tokens to get a single representation vector per sample
+        representations = torch.mean(all_tokens_encoded, dim=1)
+        # representations shape: (batch_size, feature_dim)
+        
+        return representations
+    
     @torch.no_grad()
     def _update_ema(self):
         """Updates the target encoder's weights as an EMA of the online encoder's weights."""
@@ -611,6 +851,7 @@ class JEPA_Model(nn.Module):
         with torch.no_grad(): # Target encoder is not trained via backpropagation.
             z_target_ema_all_tokens = self._process_full_view_for_target_encoder(
                 x_full_view_of_segments,
+
                 self.target_cnn_feature_extractor,
                 self.target_transformer_encoder
             )
@@ -649,8 +890,6 @@ class JEPA_Model(nn.Module):
         self._update_ema()
 
 
-# --- Conceptual Training Loop Snippet ---
-import torch.nn.functional as F
 
 
 def train_jepa_one_epoch(jepa_model, dataloader, optimizer, device, config):
@@ -708,73 +947,427 @@ def train_jepa_one_epoch(jepa_model, dataloader, optimizer, device, config):
     avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
     print(f"JEPA Epoch Average Loss: {avg_loss:.4f}")
     return avg_loss
-if __name__ == '__main__':
-    print("Running conceptual JEPA test...")
-    torch.manual_seed(0)
-    np.random.seed(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# --- Additional imports for training and data loading ---
+import sys
+import json
+import os
+import wandb
+from torch.utils.data import TensorDataset, DataLoader
+from ptflops import get_model_complexity_info
+import torch.optim as optim
 
-    # 1. Instantiate Model using JEPA_CONFIG
-    jepa_model = JEPA_Model(JEPA_CONFIG).to(device)
+# Add parent directory to path to access necessary modules
+modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
+if modules_path not in sys.path:
+    sys.path.insert(0, modules_path)
 
-    # 2. Create Dummy Data & DataLoader
-    batch_s = 4
-    # Input shape: (batch_size, total_timestamps, input_feature_dim)
-    # total_timestamps should be >= JEPA_CONFIG["num_segments_total_view"] * JEPA_CONFIG["segment_length"].
-    # Example: 3000 total timestamps if raw data is longer than the required processing window.
-    example_total_timestamps = 3000
-    dummy_data_x = torch.randn(batch_s, example_total_timestamps, JEPA_CONFIG["input_channels"]).to(device)
-    dummy_data_y = torch.randn(batch_s, 1)  # Labels not directly used in JEPA loss.
-    dummy_dataset = torch.utils.data.TensorDataset(dummy_data_x, dummy_data_y)
-    dummy_dataloader = torch.utils.data.DataLoader(dummy_dataset, batch_size=batch_s)
+from load_data import load_data_x, load_data_y
+from preset import preset
+from utils import NumpyEncoder
 
-    # 3. Optimizer (optimizes online encoder and predictor parameters)
-    online_params = list(jepa_model.online_cnn_feature_extractor.parameters()) + \
-                    list(jepa_model.online_transformer_encoder.parameters())
-    # Add predictor parameters once it's defined: + list(jepa_model.predictor.parameters())
-    optimizer = torch.optim.AdamW(online_params, lr=1e-4)
-
-
-    # 4. Conceptual Training Loop
-    num_epochs = 3
-    for epoch in range(num_epochs):
-        print(f"\nJEPA Epoch {epoch + 1}/{num_epochs}")
-        train_jepa_one_epoch(jepa_model, dummy_dataloader, optimizer, device, JEPA_CONFIG)
-
-    print("\nConceptual JEPA test finished.")
-
-    # Example of how to inspect outputs (outside training loop)
-    jepa_model.eval()
-    with torch.no_grad():
-        sample_input = torch.randn(2, example_total_timestamps, JEPA_CONFIG["input_channels"]).to(device)
-        outputs = jepa_model(sample_input)
-        print("\nSample JEPA model output keys:", list(outputs.keys()))
-        print(f"Shape of z_context_online: {outputs['z_context_online'].shape}")
-        print(f"Shape of z_target_ema_all_tokens: {outputs['z_target_ema_all_tokens'].shape}")
-
-
-        # Inspecting sampling info (segments and tokens) for first batch item:
-        print("Sampling info (first batch item):")
-        print(f"  Context segment indices: {outputs['sampling_info']['context_segment_indices_for_online_encoder'][0][:5]}... (first 5)")
-        # Accessing tensor data for printing
-        print(f"  Context token indices (tensor shape): {outputs['sampling_info']['context_token_indices_tensor'].shape}")
-        print(f"  Context token indices (first item, first 10): {outputs['sampling_info']['context_token_indices_tensor'][0, :10].tolist()}")
-        print(f"  Context padding mask (tensor shape): {outputs['sampling_info']['context_padding_mask_tensor'].shape}")
-        print(f"  Context padding mask (first item, first 10): {outputs['sampling_info']['context_padding_mask_tensor'][0, :10].tolist()}")
+class JEPADataset(torch.utils.data.Dataset):
+    """Custom dataset for JEPA training that only requires CSI data (no labels)"""
+    def __init__(self, data_x):
+        self.data_x = torch.from_numpy(data_x).float()
         
-        if outputs['sampling_info']['target_block_segment_indices_for_loss'][0]:
-            print(f"  Target block 0 segment indices: {outputs['sampling_info']['target_block_segment_indices_for_loss'][0][0]}")
-            print(f"  Target block token indices (tensor shape): {outputs['sampling_info']['target_block_token_indices_tensor'].shape}")
-            print(f"  Target block 0 token indices (first item, block 0, first 10): {outputs['sampling_info']['target_block_token_indices_tensor'][0, 0, :10].tolist()}")
+    def __len__(self):
+        return len(self.data_x)
+    
+    def __getitem__(self, idx):
+        return self.data_x[idx]
+
+def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10):
+    """Training function for JEPA model"""
+    jepa_model.train()
+    
+    # Set up wandb logging
+    run_name = f"JEPA_SSL_training_{'+'.join(config['environments'])}"
+    run = wandb.init(
+        project="jepa_ssl",
+        name=run_name,
+        config=config,
+        reinit=True
+    )
+    
+    best_loss = float('inf')
+    best_state_dict = None
+    
+    for epoch in range(num_epochs):
+        total_loss = 0
+        num_batches = 0
+        
+        for batch_idx, data_batch_x in enumerate(dataloader):
+            # For JEPADataset, data_batch_x is just the tensor
+            # For regular DataLoader with TensorDataset, data_batch_x is a tuple (data, _)
+            if isinstance(data_batch_x, tuple):
+                data_batch_x = data_batch_x[0]
+                
+            data_batch_x = data_batch_x.to(device)
+            optimizer.zero_grad()
+            
+            # Forward pass through JEPA model
+            jepa_outputs = jepa_model(data_batch_x)
+            
+            # Extract outputs
+            z_context_online = jepa_outputs["z_context_online"]
+            actual_targets_for_loss = jepa_outputs["actual_targets_for_loss"]
+            sampling_info = jepa_outputs["sampling_info"]
+            context_padding_mask = sampling_info["context_padding_mask_tensor"]
+            context_original_indices = sampling_info["context_token_indices_tensor"]
+            
+            # Skip empty context (rare sampling cases)
+            if z_context_online.shape[1] == 0:
+                continue
+            
+            # Prediction and loss calculation
+            b, num_blocks, tokens_per_block, d = actual_targets_for_loss.shape
+            
+            # 1. Reshape targets to fold the 'num_blocks' dimension into the batch dimension
+            target_indices = sampling_info["target_block_token_indices_tensor"].reshape(b * num_blocks, tokens_per_block)
+            actual_targets = actual_targets_for_loss.reshape(b * num_blocks, tokens_per_block, d)
+            
+            # 2. Expand context to match the new batch dimension
+            expanded_context = z_context_online.repeat_interleave(repeats=num_blocks, dim=0)
+            expanded_context_mask = context_padding_mask.repeat_interleave(repeats=num_blocks, dim=0)
+            expanded_context_indices = context_original_indices.repeat_interleave(repeats=num_blocks, dim=0)
+            
+            # 3. Perform prediction
+            predictions = jepa_model.predictor(
+                expanded_context,
+                expanded_context_mask,
+                target_indices,
+                expanded_context_indices
+            )
+            
+            # 4. Calculate loss
+            loss = F.mse_loss(predictions, actual_targets)
+            
+            # Backward and optimize
+            loss.backward()
+            optimizer.step()
+            jepa_model.update_ema()
+            
+            # Logging
+            total_loss += loss.item()
+            num_batches += 1
+            
+
+                
+        # Epoch-level logging
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0
+        print(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
+        if epoch == 300:
+            print("Hello")
+        wandb.log({
+            "epoch": epoch,
+            "ssl_loss": avg_loss,
+        })
+        
+        # Save best model
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_state_dict = jepa_model.state_dict().copy()
+            print(f"New best model at epoch {epoch} with loss {best_loss:.4f}")
+
+            
 
 
-        # Inspecting actual target tokens for loss for the first batch item, first target block
-        if outputs['actual_targets_for_loss'].nelement() > 0 and \
-           outputs['actual_targets_for_loss'].shape[0] > 0 and \
-           outputs['actual_targets_for_loss'].shape[1] > 0:
-            first_target_block_tokens = outputs['actual_targets_for_loss'][0][0]
-            print(f"Shape of actual tokens for first target block (item 0): {first_target_block_tokens.shape}")
-            # This shape would be (tokens_per_block, JEPA_CONFIG["cnn_output_channels"])
-            # where tokens_per_block = JEPA_CONFIG["target_block_size_segments"] * JEPA_CONFIG["cnn_embedding_time_dim"]
-        else:
-            print("Actual targets for loss tensor is empty or first block is missing for item 0.")
+
+    wandb.finish()
+    return jepa_model.state_dict()
+
+def create_tsne_plot(tsne_results, labels, title, legend_title):
+    """Creates and saves a t-SNE scatter plot."""
+    df = pd.DataFrame(tsne_results, columns=['tsne1', 'tsne2'])
+    df['label'] = labels
+    
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        x="tsne1", y="tsne2",
+        hue="label",
+        palette=sns.color_palette("hls", len(df['label'].unique())),
+        data=df,
+        legend="full",
+        alpha=0.8
+    ).set_title(title, fontsize=16)
+    
+    plt.legend(title=legend_title)
+    # Save the plot with a filename derived from the title
+    # save_filename = title.lower().replace(" ", "_") + ".png"
+    # plt.savefig(save_filename)
+    # print(f"Saved plot to {save_filename}")
+    plt.show()
+def encode_data_y(data_pd_y,
+                  var_task):
+    """
+    [description]
+    : encode labels according to specific task
+    [parameter]
+    : data_pd_y: pandas dataframe, labels of different tasks
+    : var_task: string, indicate task
+    [return]
+    : data_y: numpy array, label encoding of task
+    """
+    #
+    ##
+    if var_task == "identity":
+        #
+        data_y = encode_identity(data_pd_y)
+    #
+    elif var_task == "activity":
+        #
+        data_y = encode_activity(data_pd_y, preset["encoding"]["activity"])
+    #
+    elif var_task == "location":
+        #
+        data_y = encode_location(data_pd_y, preset["encoding"]["location"])
+    #
+    return data_y
+def encode_activity(data_pd_y,
+                    var_encoding):
+    """
+    [description]
+    : encode activity labels in a pandas dataframe
+    [parameter]
+    : data_pd_y: pandas dataframe, labels of different tasks
+    : var_encoding: dict, encoding of different activities
+    [return]
+    : data_activity_onehot_y: numpy array, onehot encoding for activity labels
+    """
+    #
+    ##
+    data_activity_pd_y = data_pd_y[["user_1_activity", "user_2_activity",
+                                    "user_3_activity", "user_4_activity",
+                                    "user_5_activity", "user_6_activity"]]
+    #
+    data_activity_y = data_activity_pd_y.to_numpy(copy = True).astype(str)
+    #
+    data_activity_onehot_y = np.array([[var_encoding[var_y] for var_y in var_sample] for var_sample in data_activity_y])
+    #
+    return data_activity_onehot_y
+def visualize_jepa_representations(model_state_dict, config, environments_to_load, device):
+    """
+    Loads a trained JEPA model, extracts representations from a dataset,
+    and generates three types of t-SNE visualizations.
+    """
+    print("--- Starting JEPA Representation Visualization ---")
+    
+    # 1. ========== Load Model ==========
+    print(f"Loading model")
+    
+    model = JEPA_Model(config).to(device)
+    model.load_state_dict(model_state_dict)
+    model.eval()
+    print("Model loaded successfully.")
+
+    # 2. ========== Load Data ==========
+    print(f"Loading data for environments: {environments_to_load}")
+    # Load labels to get the list of CSI files
+    data_pd_y = load_data_y(
+        preset["path"]["data_y"],
+        var_environment=environments_to_load,
+        var_wifi_band=preset["data"]["wifi_band"],
+        var_num_users=preset["data"]["num_users"]
+    )
+    var_label_list = data_pd_y["label"].to_list()
+    
+    # Load CSI data (X) and labels (Y)
+    data_x = load_data_x(preset["path"]["data_x"], var_label_list)
+
+    #
+    ## load CSI amplitude
+
+    y = encode_data_y(data_pd_y, preset["task"])
+    data_y = np.array(y) # Shape: (num_samples, 6, 9)
+    
+    # Process labels as described: sum over the 'users' axis
+    labels = data_y.sum(axis=1) # Shape: (num_samples, 9)
+    print(f"Loaded {len(data_x)} samples.")
+
+    # Reshape data to match model input
+    data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
+
+    # 3. ========== Extract Representations ==========
+    print("Extracting representations from the model...")
+    dataset = TensorDataset(torch.from_numpy(data_x).float())
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
+    
+    all_representations = []
+    for batch in dataloader:
+        data_batch_x = batch[0].to(device)
+        with torch.no_grad():
+            representations = model.extract_representations(data_batch_x)
+        all_representations.append(representations.cpu().numpy())
+        
+    representations_np = np.concatenate(all_representations, axis=0)
+    print(f"Representations extracted. Shape: {representations_np.shape}")
+
+    # 4. ========== Compute t-SNE ==========
+    print("Computing t-SNE... (this may take a few minutes)")
+    tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42, n_jobs=-1)
+    tsne_results = tsne.fit_transform(representations_np)
+    print("t-SNE computation complete.")
+
+    # 5. ========== Generate Plots ==========
+
+    # Plot A: Visualize by Total Number of People
+    print("\n--- Generating Plot A: By Total Number of People ---")
+    num_people = labels.sum(axis=1)
+    create_tsne_plot(
+        tsne_results,
+        num_people,
+        title="t-SNE of JEPA Representations by Number of People",
+        legend_title="Number of People"
+    )
+
+    # Plot B: Visualize by Single-Person Activity
+    print("\n--- Generating Plot B: By Single-Person Activity ---")
+    is_single_person = (labels.sum(axis=1) == 1)
+    single_person_tsne = tsne_results[is_single_person]
+    single_person_labels = labels[is_single_person]
+    
+    if len(single_person_tsne) > 0:
+        # Get the activity index (0-8)
+        activity_class = single_person_labels.argmax(axis=1)
+        activity_class_names = [f"Activity {i}" for i in activity_class]
+        create_tsne_plot(
+            single_person_tsne,
+            activity_class_names,
+            title="t-SNE of Single-Person Activities",
+            legend_title="Activity"
+        )
+    else:
+        print("No single-person samples found in the dataset to plot.")
+
+    # Plot C: Visualize by Presence of Each Activity
+    print("\n--- Generating Plot C: By Presence of Each Activity ---")
+    num_activities = labels.shape[1]
+    for i in range(num_activities):
+        has_activity = labels[:, i] > 0
+        
+        # Meaningful labels for the legend
+        presence_labels = ["Contains" if x else "Does Not Contain" for x in has_activity]
+        
+        create_tsne_plot(
+            tsne_results,
+            presence_labels,
+            title=f"t-SNE Highlighting Presence of Activity {i}",
+            legend_title=f"Activity {i} Presence"
+        )
+        
+def run_jepa(environments=["meeting_room", "empty_room"], num_epochs=50, batch_size=16):
+    """
+    Run JEPA SSL training on specified environments.
+    Args:
+        environments: List of environment names to train on
+        num_epochs: Number of training epochs
+        batch_size: Batch size for training
+    Returns:
+        saved_model_path: Path to the saved model
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Create training config
+    train_config = {
+        "environments": environments,
+        "num_epochs": num_epochs,
+        "batch_size": batch_size,
+        "learning_rate": 5e-5,
+        "weight_decay": 1e-6,
+        "ema_decay": JEPA_CONFIG["ema_decay"],
+        "model_config": JEPA_CONFIG
+    }
+    
+    # Load CSI data from specified environments
+    all_data_x = []
+    
+    for env in environments:
+        # Load labels first to get the list of CSI files
+        data_pd_y = load_data_y(
+            preset["path"]["data_y"],
+            var_environment=[env],
+            var_wifi_band=preset["data"]["wifi_band"],
+            var_num_users=preset["data"]["num_users"]
+        )
+        
+        # Extract label list (needed for load_data_x)
+        var_label_list = data_pd_y["label"].to_list()
+        
+        # Load CSI amplitude (we only need X for SSL)
+        env_data_x = load_data_x(preset["path"]["data_x"], var_label_list)
+        all_data_x.append(env_data_x)
+        print(f"Loaded {len(env_data_x)} samples from {env}")
+    
+    # Combine data from all environments
+    data_x = np.concatenate(all_data_x, axis=0)
+    print(f"Total training data: {len(data_x)} samples")
+    
+    # Reshape data to match expected input format
+    data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
+    var_x_shape = data_x[0].shape
+    
+    # Create dataset and dataloader
+    jepa_dataset = JEPADataset(data_x)
+    dataloader = DataLoader(jepa_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
+    
+    # Initialize JEPA model
+    jepa_model = JEPA_Model(JEPA_CONFIG).to(device)
+    
+    # Calculate model complexity
+    macs, params = get_model_complexity_info(JEPA_Model(JEPA_CONFIG), var_x_shape, as_strings=False)
+    print(f"Model Parameters: {params:,}, FLOPs: {macs * 2:,}")
+    
+    # Create optimizer
+    optimizer = optim.AdamW(
+        jepa_model.parameters(),
+        lr=train_config["learning_rate"],
+        weight_decay=train_config["weight_decay"]
+    )
+    
+    # Train the model
+    print("Starting JEPA SSL training...")
+    best_state_dict = train_jepa(
+        jepa_model=jepa_model,
+        dataloader=dataloader,
+        optimizer=optimizer,
+        device=device,
+        config=train_config,
+        num_epochs=num_epochs
+    )
+    
+    visualize_jepa_representations(best_state_dict, JEPA_CONFIG, environments, device)
+
+    # Save the model
+    save_dir = os.path.join(preset["path"].get("models_dir", "./saved_models"), "jepa_ssl")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    model_filename = f"jepa_ssl_{'+'.join(environments)}_{timestamp}.pth"
+    model_path = os.path.join(save_dir, model_filename)
+    
+    torch.save({
+        'model_state_dict': best_state_dict,
+        'config': JEPA_CONFIG,
+        'training_config': train_config,
+        'environments': environments
+    }, model_path)
+    
+    print(f"Model saved to {model_path}")
+    
+    # Save training results
+    results = {
+        "model": "JEPA_SSL",
+        "environments": environments,
+        "config": JEPA_CONFIG,
+        "training_config": train_config,
+        "model_path": model_path
+    }
+    
+    results_path = os.path.join(save_dir, f"jepa_ssl_results_{timestamp}.json")
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=4, cls=NumpyEncoder)
+    
+    return model_path
+
+run_jepa(num_epochs=JEPA_CONFIG["num_epochs"])
