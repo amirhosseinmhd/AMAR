@@ -708,8 +708,8 @@ class DETR_MultiUser(nn.Module):
         # e.g., (batch_size, 3000, input_channels)
         # We reshape it to (batch_size * num_segments, segment_length, input_channels)
         # e.g., (batch_size * 15, 200, input_channels)
-        x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
-
+        # x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
+        x_batched = x
         # Apply feature extractor once on the batched segments
         extracted_features = self.feature_extractor(x_batched)
 
@@ -728,9 +728,9 @@ class DETR_MultiUser(nn.Module):
         # (batch_size, num_segments * T_out_segment, features_dim)
         T_out_segment = extracted_features.shape[1]
         output_features_dim = extracted_features.shape[2]
-        var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
+        # var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
         # var_embedding = self.feature_extractor(x)
-
+        var_embedding = extracted_features
 
         memory = self.encoder(var_embedding)
 

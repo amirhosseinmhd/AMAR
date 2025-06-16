@@ -8,6 +8,8 @@ import os
 preset = {
     #
     ## define model
+    "jepa_pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/model/saved_models/jepa_ssl_empty_room_20250615_195019/jepa_ssl_final_empty_room_20250615_195019.pth",
+    "finetune_strategy": "freeze_all",
     "wandb_name": "test",
     "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
@@ -43,8 +45,8 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 4e-4,                                     # learning rate
-        "epoch": 170,                                   # number of epochs
-        "batch_size":16,                              # batch size
+        "epoch": 1,                                   # number of epochs
+        "batch_size":64,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
@@ -69,6 +71,24 @@ preset = {
         "n_attention_heads": 5,
         "query_dropout_rate": 0.0
     },
+    "jepa": {
+
+        "segment_length": 200,              # Number of timestamps in each segment.
+        "num_segments_total_view": 14,      # Total number of segments considered in a single processing view.
+        "encoder_layers": 3,                # Number of layers in the Transformer Encoder.
+        "ema_decay": 0.9996,                 # Decay rate for the Exponential Moving Average of target encoder weights.
+        "num_target_blocks": 4,             # Number of target blocks to sample and predict.
+        "target_block_size_segments": 3,    # Number of contiguous segments forming a single target block.
+
+        # --- Predictor Specific Configurations ---
+        # The "narrow" dimension of the predictor's internal Transformer.
+        "predictor_d_model": 32,
+        "predictor_attention_heads": 4,       # Number of attention heads in the Predictor's Transformer.
+        "predictor_layers": 2,                # Number of layers in the Predictor's Transformer.
+        "sampling_weight_decay_factor": 0.9,  # Factor to reduce weights after sampling
+        "sampling_weight_reset_interval": 1000,  # Reset weights every N times
+        "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
+        }, 
     ## encoding of activities and locations
     "encoding": {
         "activity": {                                   # encoding of different activities
