@@ -28,7 +28,15 @@ from utils import *
 import wandb
 from collections import Counter
 import itertools # Ensure itertools is imported
-from JEPA import JEPA_Model, JEPA_CONFIG, CNNFeatureExtractor as JEPA_CNNFeatureExtractor, Transformer_Encoder as JEPA_Transformer_Encoder # Import JEPA components
+from model.JEPA import JEPA_Model, CNNFeatureExtractor as JEPA_CNNFeatureExtractor, Transformer_Encoder as JEPA_Transformer_Encoder # Import JEPA components
+
+JEPA_CONFIG = preset["jepa"]
+JEPA_CONFIG.update(preset["nn"])  # Merge with neural network hyperparameters
+JEPA_CONFIG.update(preset["data"])  # Merge with data selection parameters
+JEPA_CONFIG["num_target_blocks"] = int(JEPA_CONFIG["num_segments_total_view"] * 0.22)
+JEPA_CONFIG["cnn_embedding_time_dim"] = int(JEPA_CONFIG["segment_length"] / 20)
+
+
 
 def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state):
     """
@@ -434,8 +442,16 @@ class HungarianMatchingLoss(nn.Module):
         weights[-1] = class_imbalance_weight
         weights = weights * (len(weights) / weights.sum())
 
+        # Get the device based on the hierarchy: CUDA, MPS, CPU
+        if torch.cuda.is_available():
+            target_device = torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            target_device = torch.device("mps")
+        else:
+            target_device = torch.device("cpu")
+
         self.ce_loss = nn.CrossEntropyLoss(
-            weight=weights.to(torch.device('cuda')),
+            weight=weights.to(target_device),
             label_smoothing=label_smoothing
         )
 
@@ -562,7 +578,7 @@ class HungarianMatchingLoss(nn.Module):
 
 
 
-def run_that_detr(data_train_x,
+def run_multi_user(data_train_x,
                      data_train_y,
                      data_test_x,
                      data_test_y,
@@ -581,7 +597,15 @@ def run_that_detr(data_train_x,
     """
     #
     ##
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    print(f"Using device: {device}")
     #
     ##
     ## ============================================ Preprocess ============================================
@@ -600,31 +624,40 @@ def run_that_detr(data_train_x,
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
-    data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
-    # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
-    data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
-
-
+    data_train_set = TensorDataset(
+        torch.from_numpy(data_train_x).float(), 
+        torch.from_numpy(data_train_y).float()
+    )
+    data_valid_set = TensorDataset(
+        torch.from_numpy(data_valid_x).float(), 
+        torch.from_numpy(data_valid_y).float()
+    )
     # ===================================== Load Pre-trained JEPA Model =========================================
     jepa_pretrained_path = preset.get("jepa_pretrained_path")
     if not jepa_pretrained_path:
         raise ValueError("Path to pre-trained JEPA model ('jepa_pretrained_path') not found in preset.")
 
     jepa_checkpoint = torch.load(jepa_pretrained_path, map_location=device)
-    loaded_jepa_config = jepa_checkpoint.get('config', JEPA_CONFIG) 
+    loaded_jepa_config = JEPA_CONFIG
     
     temp_jepa_model = JEPA_Model(loaded_jepa_config).to(device)
     
-    if 'model_state_dict' in jepa_checkpoint:
-        temp_jepa_model.load_state_dict(jepa_checkpoint['model_state_dict'])
-    elif 'online_cnn_feature_extractor' in jepa_checkpoint and 'online_transformer_encoder' in jepa_checkpoint:
-         temp_jepa_model.online_cnn_feature_extractor.load_state_dict(jepa_checkpoint['online_cnn_feature_extractor'])
-         temp_jepa_model.online_transformer_encoder.load_state_dict(jepa_checkpoint['online_transformer_encoder'])
-    else: 
-        temp_jepa_model.load_state_dict(jepa_checkpoint)
+    if 'best_state_dict' in jepa_checkpoint:
+        temp_jepa_model.load_state_dict(jepa_checkpoint['best_state_dict'])
+    else:
+        raise Exception(f"JEPA model checkpoint not found in {jepa_pretrained_path}")
+    # elif 'online_cnn_feature_extractor' in jepa_checkpoint and 'online_transformer_encoder' in jepa_checkpoint:
+    #      temp_jepa_model.online_cnn_feature_extractor.load_state_dict(jepa_checkpoint['online_cnn_feature_extractor'])
+    #      temp_jepa_model.online_transformer_encoder.load_state_dict(jepa_checkpoint['online_transformer_encoder'])
+    # else:
+    #     temp_jepa_model.load_state_dict(jepa_checkpoint)
 
-    pretrained_cnn = temp_jepa_model.online_cnn_feature_extractor
-    pretrained_encoder = temp_jepa_model.online_transformer_encoder
+    pretrained_cnn = temp_jepa_model.target_cnn_feature_extractor
+    pretrained_encoder = temp_jepa_model.target_transformer_encoder
+
+    #     pretrained_cnn = temp_jepa_model.online_cnn_feature_extractor
+    # pretrained_encoder = temp_jepa_model.online_transformer_encoder
+ 
     ## ========================================= Train & Evaluate =========================================
     result_accuracy = []
     result_ppp = []

@@ -8,10 +8,10 @@ import os
 preset = {
     #
     ## define model
-    "jepa_pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/model/saved_models/jepa_ssl_empty_room_20250615_195019/jepa_ssl_final_empty_room_20250615_195019.pth",
-    "finetune_strategy": "freeze_all",
+    "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
+    "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "test",
-    "model": "DETR",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "multi_user",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR
     # "model": "MLP",

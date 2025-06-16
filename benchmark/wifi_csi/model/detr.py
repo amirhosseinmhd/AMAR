@@ -749,8 +749,16 @@ class HungarianMatchingLoss(nn.Module):
         weights[-1] = class_imbalance_weight
         weights = weights * (len(weights) / weights.sum())
 
+        # Get the device based on the hierarchy: CUDA, MPS, CPU
+        if torch.cuda.is_available():
+            target_device = torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            target_device = torch.device("mps")
+        else:
+            target_device = torch.device("cpu")
+            
         self.ce_loss = nn.CrossEntropyLoss(
-            weight=weights.to(torch.device('cuda')),
+            weight=weights.to(target_device),
             label_smoothing=label_smoothing
         )
 
@@ -896,10 +904,17 @@ def run_that_detr(data_train_x,
     """
     #
     ##
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    #
-    ##
     ## ============================================ Preprocess ============================================
+    #
+    # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    print(f"Using device: {device}")
     #
     ## Remove the internal validation split since validation data is now provided directly
     # data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(

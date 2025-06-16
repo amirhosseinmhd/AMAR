@@ -22,6 +22,7 @@ from .detr import run_that_detr
 from .joint_location_detr import run_joint_detr
 from .crowd_counting_THAT import run_crowd_counting_THAT
 from .multi_senseX import run_multi_senseX
+from .multi_user import run_multi_user
 
 #
 ##

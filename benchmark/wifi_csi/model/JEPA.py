@@ -28,7 +28,6 @@ import torch.optim as optim
 import wandb
 
 
-from train import train
 from load_data import load_data_x, load_data_y
 from preset import preset
 from utils import *
@@ -1378,7 +1377,15 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     Returns:
         saved_model_path: Path to the saved model
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ## ================= Device Setup ========================
+    # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
     print(f"Using device: {device}")
     
     # Load CSI data from specified environments

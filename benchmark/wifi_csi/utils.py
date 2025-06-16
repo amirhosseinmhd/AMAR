@@ -23,7 +23,15 @@ def load_model_components(model, load_path, lr, scenario="full", device=None):
         param_groups: List of parameter groups with their learning rates
     """
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        
+        print(f"Using device: {device}")
     # Load full state dict
     state_dict = torch.load(load_path, map_location=device)
     param_groups = []
