@@ -22,8 +22,10 @@ preset = {
     "repeat": 1,
     ## path of data
     "path": {
-        "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
-        "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",  # path of annotation file
+        # "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",  # directory of CSI amplitude files
+        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
+        # "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",  # path of annotation file
+        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -31,7 +33,7 @@ preset = {
     "data": {
         "num_users": ["0","1", "2", "3", "4", "5"] ,   # select number(s) of users, (e.g., ["0", "1"], ["2", "3", "4", "5"])
         "wifi_band": ["5"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
-        "environment": ["empty_room"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
+        "environment": ["meeting_room", "classroom"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
         "length": 3000,                                 # default length of CSI
     },
     "data_band2": {
@@ -45,7 +47,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 4e-4,                                     # learning rate
-        "epoch": 1,                                   # number of epochs
+        "epoch": 100,                                   # number of epochs
         "batch_size":64,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -58,17 +60,17 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.3,  # label smoothing factor
+            "label_smoothing": 0.05,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
-        "weight_decay": 2e-4,
-        "num_obj_queries": 6,
-        "num_decoder_layers": 5,
+        "weight_decay": 1e-6,
+        "num_obj_queries": 5,
+        "num_decoder_layers": 2,
         "dim_FFN": 512,
         "token_length": 145,
-        "d_embedding": 40,
-        "n_attention_heads": 5,
+        "d_embedding": 48,
+        "n_attention_heads": 4,
         "query_dropout_rate": 0.0
     },
     "jepa": {
