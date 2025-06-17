@@ -1,5 +1,3 @@
-
-# jepa.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,17 +14,13 @@ import math
 import json
 import sys
 
-from wandb.cli.cli import offline
-
-modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
-if modules_path not in sys.path:
-    sys.path.insert(0, modules_path)
 import shutil
 from torch.utils.data import TensorDataset, DataLoader
 from ptflops import get_model_complexity_info
 import torch.optim as optim
 import wandb
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from load_data import load_data_x, load_data_y
 from preset import preset
@@ -39,7 +33,6 @@ from utils import NumpyEncoder
 JEPA_CONFIG = preset["jepa"]
 JEPA_CONFIG.update(preset["nn"])  # Merge with neural network hyperparameters
 JEPA_CONFIG.update(preset["data"])  # Merge with data selection parameters
-JEPA_CONFIG["num_target_blocks"] = int(JEPA_CONFIG["num_segments_total_view"] * 0.22)
 JEPA_CONFIG["cnn_embedding_time_dim"] = int(JEPA_CONFIG["segment_length"] / 20)
 
 class JEPADataset(torch.utils.data.Dataset):
@@ -1554,5 +1547,5 @@ if __name__ == "__main__":
             batch_size=args.batch_size
         )
 
-    visualize_jepa_representations(model_state_dict=state_dicts, config=JEPA_CONFIG, environments_to_load=["classroom", "meeting_room", "empty_room"],
-                                   device=torch.device('cuda'))
+    # visualize_jepa_representations(model_state_dict=state_dicts, config=JEPA_CONFIG, environments_to_load=["classroom", "meeting_room", "empty_room"],
+    #                                device=torch.device('mps'))
