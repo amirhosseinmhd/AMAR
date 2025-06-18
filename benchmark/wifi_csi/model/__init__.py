@@ -43,4 +43,5 @@ __all__ = ["run_strf",
            "run_that_detr",
             "run_joint_detr",
            "run_crowd_counting_THAT",
-           "run_multi_senseX"]
+           "run_multi_senseX",
+           "run_multi_user"]
