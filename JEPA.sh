@@ -35,6 +35,16 @@ echo "Python version: $(python --version)"
 # Define checkpoint directory for reference
 CHECKPOINT_DIR="$PROJECT_DIR/experiment_results/jepa_checkpoints"
 
+
+export DECAY_TEACHER=0.997 
+# Now we change the preset accordingly
+python config_modifier.py preset.py modified_preset.py
+# just to verify:
+cat modified_preset.py
+rm preset.py
+mv modified_preset.py preset.py
+echo "starting the main script"
+
 # OPTION 1: Fresh training (default)
 # Run with 2 environments, for 2 epochs, with batch size 8
 python model/JEPA.py --envs meeting_room empty_room --epochs 20 --batch-size 64

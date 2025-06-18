@@ -49,7 +49,8 @@ def update_config_from_env(config):
         config['nn']['token_length'] = int(os.environ['TOKEN_LENGTH'])
     if 'QUERY_DROP_OUT_RATE' in os.environ:
         config['nn']['query_dropout_rate'] = float(os.environ['QUERY_DROP_OUT_RATE'])
-
+    if 'DECAY_TEACHER' in os.environ:
+        config['jepa']['ema_decay'] = float(os.environ['DECAY_TEACHER'])
     if 'ENVIRONMENTS_EXP' in os.environ:
         # Split by comma and strip whitespace
         environments = [env.strip() for env in os.environ['ENVIRONMENTS_EXP'].split(',')]
