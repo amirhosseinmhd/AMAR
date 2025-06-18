@@ -1002,6 +1002,176 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     return checkpoint
+def generate_tsne_visualizations(model, environments, device, epoch):
+    """
+    Generate t-SNE visualizations for each environment and a combined visualization.
+    
+    Args:
+        model: The JEPA model for generating representations
+        environments: List of environments to visualize
+        device: Device to run the model on
+        epoch: Current training epoch (for logging)
+        
+    Returns:
+        dict: Dictionary of matplotlib figures for wandb logging
+    """
+    model.eval()  # Set model to evaluation mode
+    figures = {}
+    all_data_x = []
+    all_environment_labels = []
+    
+    # Process each environment separately
+    for env_idx, env in enumerate(environments):
+        print(f"Generating t-SNE visualization for {env}...")
+        
+        # Load data for this environment
+        data_pd_y = load_data_y(
+            preset["path"]["data_y"],
+            var_environment=[env],
+            var_wifi_band=preset["data"]["wifi_band"],
+            var_num_users=preset["data"]["num_users"]
+        )
+        var_label_list = data_pd_y["label"].to_list()
+        env_data_x = load_data_x(preset["path"]["data_x"], var_label_list)
+        
+        # Reshape data to match expected input format
+        env_data_x = env_data_x.reshape(env_data_x.shape[0], env_data_x.shape[1], -1)
+        
+        # For combined plot, store data and environment labels
+        if len(environments) > 1:
+            all_data_x.append(env_data_x)
+            all_environment_labels.extend([env] * len(env_data_x))
+        
+        # Process activity labels
+        y = encode_activity(data_pd_y)
+        data_y = np.array(y)  # Shape: (num_samples, 6, 9)
+        num_people = data_y.sum(axis=1).sum(axis=1)  # Count total people per sample
+        
+        # Extract representations
+        dataset = TensorDataset(torch.from_numpy(env_data_x).float())
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
+        
+        all_representations = []
+        with torch.no_grad():
+            for batch in dataloader:
+                data_batch_x = batch[0].to(device)
+                representations = model.extract_representations(data_batch_x)
+                all_representations.append(representations.cpu().numpy())
+                
+        representations_np = np.concatenate(all_representations, axis=0)
+        
+        # Compute t-SNE
+        tsne_model = TSNE(
+            n_components=2, 
+            perplexity=min(50, max(5, len(representations_np) // 5)),  # Adjust perplexity based on sample size
+            n_iter=1000, 
+            random_state=42, 
+            n_jobs=-1,
+            init='pca', 
+            learning_rate='auto'
+        )
+        
+        tsne_results = tsne_model.fit_transform(representations_np)
+        
+        # Create the figure
+        fig = plt.figure(figsize=(12, 10))
+        
+        # Find unique labels to create distinct colors
+        unique_labels = np.unique(num_people)
+        num_unique_labels = len(unique_labels)
+        
+        # Use a qualitative colormap suitable for categorical data
+        cmap = plt.get_cmap('tab10', max(8, num_unique_labels))
+        
+        # Create the scatter plot
+        scatter = plt.scatter(
+            tsne_results[:, 0],
+            tsne_results[:, 1],
+            c=num_people,
+            cmap=cmap,
+            alpha=0.8,
+            s=40,
+            vmin=unique_labels.min() - 0.5,
+            vmax=unique_labels.max() + 0.5
+        )
+        
+        # Create a colorbar with ticks corresponding to each unique label
+        cbar = plt.colorbar(scatter, ticks=unique_labels, label="Number of People")
+        cbar.ax.tick_params(labelsize=10)
+        
+        plt.title(f"t-SNE of JEPA Representations - {env} (Epoch {epoch})")
+        plt.xlabel("t-SNE Dimension 1")
+        plt.ylabel("t-SNE Dimension 2")
+        
+        figures[f"tsne_{env}"] = fig
+    
+    # Generate combined visualization if there are multiple environments
+    if len(environments) > 1:
+        combined_data_x = np.concatenate(all_data_x, axis=0)
+        
+        # Extract representations for combined data
+        dataset = TensorDataset(torch.from_numpy(combined_data_x).float())
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
+        
+        all_representations = []
+        with torch.no_grad():
+            for batch in dataloader:
+                data_batch_x = batch[0].to(device)
+                representations = model.extract_representations(data_batch_x)
+                all_representations.append(representations.cpu().numpy())
+                
+        representations_np = np.concatenate(all_representations, axis=0)
+        
+        # Compute t-SNE for combined data
+        tsne_model = TSNE(
+            n_components=2, 
+            perplexity=min(50, max(5, len(representations_np) // 5)),
+            n_iter=1000, 
+            random_state=42, 
+            n_jobs=-1,
+            init='pca', 
+            learning_rate='auto'
+        )
+        
+        tsne_results = tsne_model.fit_transform(representations_np)
+        
+        # Create the figure for combined data
+        fig = plt.figure(figsize=(12, 10))
+        
+        # Create categorical environment labels for coloring
+        unique_envs = list(set(all_environment_labels))
+        env_to_id = {env: i for i, env in enumerate(unique_envs)}
+        env_ids = [env_to_id[env] for env in all_environment_labels]
+        
+        # Use a qualitative colormap
+        cmap = plt.get_cmap('tab10', len(unique_envs))
+        
+        # Create the scatter plot colored by environment
+        scatter = plt.scatter(
+            tsne_results[:, 0],
+            tsne_results[:, 1],
+            c=env_ids,
+            cmap=cmap,
+            alpha=0.8,
+            s=40,
+            vmin=-0.5,
+            vmax=len(unique_envs) - 0.5
+        )
+        
+        # Create a colorbar with ticks for each environment
+        cbar = plt.colorbar(scatter, ticks=range(len(unique_envs)), label="Environment")
+        cbar.ax.set_yticklabels(unique_envs)
+        cbar.ax.tick_params(labelsize=10)
+        
+        plt.title(f"t-SNE of JEPA Representations - All Environments (Epoch {epoch})")
+        plt.xlabel("t-SNE Dimension 1")
+        plt.ylabel("t-SNE Dimension 2")
+        
+        figures["tsne_combined"] = fig
+    
+    model.train()  # Return to training mode
+    return figures
+
 def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10, 
                resume_from=None, checkpoint_dir=None, checkpoint_interval=10):
     # Create checkpoint directory if provided
@@ -1105,6 +1275,21 @@ def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10,
             "ssl_loss": avg_loss,
         })
 
+        # Generate t-SNE visualizations every 15 epochs or on the last epoch
+        if epoch % 15 == 0 or epoch == num_epochs - 1:
+            print(f"Generating t-SNE visualizations at epoch {epoch}...")
+            tsne_figures = generate_tsne_visualizations(
+                jepa_model, 
+                config['environment'], 
+                device, 
+                epoch
+            )
+            
+            # Log the figures to wandb
+            for name, fig in tsne_figures.items():
+                wandb.log({f"{name}_epoch_{epoch}": wandb.Image(fig)}, step=epoch)
+                plt.close(fig)  # Close the figure to free memory
+
         if epoch % 10 == 0 or epoch == num_epochs - 1:
             print(f"Computing SVD statistics at epoch {epoch}...")
             svd_stats = compute_representation_svd_stats(jepa_model, dataloader, device, max_samples=500)
@@ -1112,8 +1297,6 @@ def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10,
                 wandb.log({**svd_stats, "epoch": epoch})
                 print(f"SVD Stats - Effective Rank: {svd_stats.get('svd/effective_rank', 'N/A')}, "
                     f"Condition Number: {svd_stats.get('svd/condition_number', 'N/A'):.2f}")
-
-
 
         # Save best model
         is_best = avg_loss < best_loss
