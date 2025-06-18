@@ -1484,7 +1484,7 @@ def visualize_jepa_representations(model_state_dict, environments_to_load, devic
         )
 def compute_representation_svd_stats(model, dataloader, device, max_samples=1000):
     """
-    Compute SVD statistics on model representations for monitoring representation quality
+    Compute simplified SVD statistics on model representations for monitoring representation collapse
     
     Args:
         model: JEPA model
@@ -1493,7 +1493,7 @@ def compute_representation_svd_stats(model, dataloader, device, max_samples=1000
         max_samples: Maximum number of samples to use for SVD analysis
     
     Returns:
-        dict: SVD statistics for logging
+        dict: Simplified SVD statistics for logging (only 3 key metrics)
     """
     model.eval()
     representations = []
@@ -1525,7 +1525,7 @@ def compute_representation_svd_stats(model, dataloader, device, max_samples=1000
     # Compute SVD
     U, s, Vt = np.linalg.svd(representations, full_matrices=False)
     
-    # Compute various SVD-based statistics
+    # Compute simplified statistics focused on collapse detection
     total_variance = np.sum(s**2)
     explained_variance_ratio = (s**2) / total_variance
     cumulative_variance = np.cumsum(explained_variance_ratio)
@@ -1533,18 +1533,10 @@ def compute_representation_svd_stats(model, dataloader, device, max_samples=1000
     # Effective rank (number of singular values needed to explain 90% of variance)
     effective_rank = np.argmax(cumulative_variance >= 0.9) + 1
     
-    # Prepare statistics for logging
     stats = {
-        'svd/singular_values_mean': float(np.mean(s)),
-        'svd/singular_values_std': float(np.std(s)),
-        'svd/singular_values_max': float(np.max(s)),
-        'svd/singular_values_min': float(np.min(s)),
         'svd/effective_rank': int(effective_rank),
-        'svd/rank_ratio': float(effective_rank / len(s)),
-        'svd/top_10_variance_explained': float(np.sum(explained_variance_ratio[:10])),
         'svd/condition_number': float(s[0] / s[-1]) if s[-1] > 1e-10 else float('inf'),
-        'svd/spectral_gap': float(s[0] - s[1]) if len(s) > 1 else 0.0,
-        'svd/intrinsic_dimension': int(np.sum(cumulative_variance <= 0.95)),
+        'svd/top_singular_value_ratio': float(s[0] / np.sum(s)),  # Dominance of first component
     }
     
     model.train()  # Return to training mode
