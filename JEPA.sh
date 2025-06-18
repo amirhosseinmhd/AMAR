@@ -37,7 +37,7 @@ CHECKPOINT_DIR="$PROJECT_DIR/experiment_results/jepa_checkpoints"
 
 # OPTION 1: Fresh training (default)
 # Run with 2 environments, for 2 epochs, with batch size 8
-python -m model.JEPA --envs meeting_room empty_room --epochs 20 --batch-size 64
+python model/JEPA.py --envs meeting_room empty_room --epochs 20 --batch-size 64
 
 # OPTION 2: Resume training (commented by default)
 # Uncomment the following lines and comment the above python command to resume training
