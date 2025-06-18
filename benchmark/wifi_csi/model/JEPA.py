@@ -1273,7 +1273,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10,
         wandb.log({
             "epoch": epoch,
             "ssl_loss": avg_loss,
-        })
+        }, step=epoch)
 
         # Generate t-SNE visualizations every 15 epochs or on the last epoch
         if epoch % 15 == 0 or epoch == num_epochs - 1:
@@ -1285,7 +1285,6 @@ def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10,
                 epoch
             )
             
-            # Log the figures to wandb
             for name, fig in tsne_figures.items():
                 wandb.log({f"{name}_epoch_{epoch}": wandb.Image(fig)}, step=epoch)
                 plt.close(fig)  # Close the figure to free memory
@@ -1294,7 +1293,8 @@ def train_jepa(jepa_model, dataloader, optimizer, device, config, num_epochs=10,
             print(f"Computing SVD statistics at epoch {epoch}...")
             svd_stats = compute_representation_svd_stats(jepa_model, dataloader, device, max_samples=500)
             if svd_stats:
-                wandb.log({**svd_stats, "epoch": epoch})
+                # Fix: Add step=epoch here too
+                wandb.log({**svd_stats, "epoch": epoch}, step=epoch)
                 print(f"SVD Stats - Effective Rank: {svd_stats.get('svd/effective_rank', 'N/A')}, "
                     f"Condition Number: {svd_stats.get('svd/condition_number', 'N/A'):.2f}")
 
