@@ -34,7 +34,7 @@ cd $SLURM_TMPDIR/$CODE_DIR
 
 module purge
 module load python/3.11.5 scipy-stack
-source ~/py311/bin/activate
+source ~/py311_g/bin/activate
 
 echo "Starting job at $(date)"
 echo "Working directory: $(pwd)"

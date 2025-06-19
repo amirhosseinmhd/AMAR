@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=00:30:0
+#SBATCH --time=08:30:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
@@ -36,7 +36,7 @@ echo "Python version: $(python --version)"
 CHECKPOINT_DIR="$PROJECT_DIR/experiment_results/jepa_checkpoints"
 
 
-export DECAY_TEACHER=0.997 
+export DECAY_TEACHER=0.9997 
 # Now we change the preset accordingly
 python config_modifier.py preset.py modified_preset.py
 # just to verify:
@@ -47,8 +47,7 @@ echo "starting the main script"
 
 # OPTION 1: Fresh training (default)
 # Run with 2 environments, for 2 epochs, with batch size 8
-python model/JEPA.py --envs meeting_room empty_room --epochs 20 --batch-size 64
-
+python -m model.JEPA --envs meeting_room empty_room classroom --epochs 400 --batch-size 64
 # OPTION 2: Resume training (commented by default)
 # Uncomment the following lines and comment the above python command to resume training
 # LATEST_CHECKPOINT=$(find $CHECKPOINT_DIR -name "best_model.pth" -type f | head -1)
