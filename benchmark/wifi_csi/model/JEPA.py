@@ -6,9 +6,8 @@ import time
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
-import pandas as pd
-import copy # For deepcopying model for EMA
-
+from pandas import DataFrame
+from copy import deepcopy
 import os
 import math
 import json
@@ -530,8 +529,8 @@ class JEPA_Model(nn.Module):
             max_total_tokens=self.max_total_tokens_in_view          # Capable of handling all tokens if needed.
         )
         # --- Target Encoder (EMA of Online Encoder, not directly trained) ---
-        self.target_cnn_feature_extractor = copy.deepcopy(self.online_cnn_feature_extractor)
-        self.target_transformer_encoder = copy.deepcopy(self.online_transformer_encoder)
+        self.target_cnn_feature_extractor = deepcopy(self.online_cnn_feature_extractor)
+        self.target_transformer_encoder = deepcopy(self.online_transformer_encoder)
 
         # Freeze parameters of the target encoder; they are updated via EMA.
         for param in self.target_cnn_feature_extractor.parameters():
@@ -1331,7 +1330,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     return best_state_dict
 def create_tsne_plot(tsne_results, labels, title, legend_title):
     """Creates and saves a t-SNE scatter plot."""
-    df = pd.DataFrame(tsne_results, columns=['tsne1', 'tsne2'])
+    df = DataFrame(tsne_results, columns=['tsne1', 'tsne2'])
     df['label'] = labels
     
     plt.figure(figsize=(12, 8))
@@ -1564,7 +1563,7 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     
     # Load CSI data from specified environments
     all_data_x = []
-    
+    print("Loading data for environments:", environments)
     for env in environments:
         # Load labels first to get the list of CSI files
         data_pd_y = load_data_y(
