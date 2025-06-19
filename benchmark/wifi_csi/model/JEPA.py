@@ -1176,7 +1176,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
         project="jepa_ssl",
         name=run_name,
         config=preset,
-        reinit=True,mode="online"
+        reinit=True,mode="offline"
     )
     
     start_epoch = 0
