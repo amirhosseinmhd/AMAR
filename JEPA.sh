@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --nodes=1
-#SBATCH --time=00:20:0
-
+#SBATCH --time=11:40:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
 #SBATCH --job-name=jepa_prototype
 #SBATCH --output=experiment_results/jepa_prototype-%j.out
+#SBATCH --cpus-per-task=16
 
 # Create output directory
 mkdir -p experiment_results
@@ -37,7 +37,7 @@ echo "Python version: $(python --version)"
 CHECKPOINT_DIR="$PROJECT_DIR/experiment_results/jepa_checkpoints"
 
 
-export DECAY_TEACHER=0.9997 
+export DECAY_TEACHER=0.9999
 # Now we change the preset accordingly
 python config_modifier.py preset.py modified_preset.py
 # just to verify:
@@ -49,7 +49,7 @@ echo "starting the main script"
 # OPTION 1: Fresh training (default)
 # Run with 2 environments, for 2 epochs, with batch size 8
 
-python model/JEPA.py --envs meeting_room --epochs 20 --batch-size 64
+python model/JEPA.py
 
 # OPTION 2: Resume training (commented by default)
 # Uncomment the following lines and comment the above python command to resume training
@@ -67,6 +67,18 @@ python model/JEPA.py --envs meeting_room --epochs 20 --batch-size 64
 if [ -d "saved_models" ]; then
     echo "Copying saved models back to project directory..."
     cp -r saved_models $PROJECT_DIR/experiment_results/jepa_models_${SLURM_JOB_ID}
+fi
+
+if [ -d "wandb" ]; then
+    echo "Copying wandb offline run data back..."
+    # The directory will be named based on the job ID to avoid conflicts
+    WANDB_DEST_DIR="$PROJECT_DIR/experiment_results/wandb_run_${SLURM_JOB_ID}"
+    mkdir -p $WANDB_DEST_DIR
+    cp -r wandb $WANDB_DEST_DIR/
+    echo "Wandb data for this run is in: $WANDB_DEST_DIR/wandb"
+    echo "To sync results to the cloud, log in to a node with internet access, then run:"
+    echo "wandb login"
+    echo "wandb sync $WANDB_DEST_DIR/wandb"
 fi
 
 # Copy any checkpoint directories
