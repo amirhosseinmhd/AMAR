@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mem=128G
+#SBATCH --mem=100G
 #SBATCH --nodes=1
 #SBATCH --time=11:40:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
@@ -7,7 +7,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --job-name=jepa_prototype
 #SBATCH --output=experiment_results/jepa_prototype-%j.out
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 
 # Create output directory
 mkdir -p experiment_results

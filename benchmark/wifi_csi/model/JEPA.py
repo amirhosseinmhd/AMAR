@@ -742,10 +742,10 @@ class JEPA_Model(nn.Module):
         # Reshape for CNN:
         # (batch_size, num_total_segments * segment_len, input_channels) ->
         # (batch_size * num_total_segments, segment_len, input_channels)
-        cnn_input = x_full_view_batch.reshape(
-            batch_size* num_total_segments,segment_len,
-            input_channels
-        )
+        cnn_input = x_full_view_batch#.reshape(
+            # batch_size* num_total_segments,segment_len,
+            # input_channels
+        # )
 
         # Pass through CNN. Output shape:
         # (batch_size * num_total_segments, self.tokens_per_segment, cnn_out_channels)
@@ -754,11 +754,11 @@ class JEPA_Model(nn.Module):
         # Reshape for Transformer:
         # (batch_size, num_total_segments * self.tokens_per_segment, cnn_out_channels)
         # which is (batch_size, self.max_total_tokens_in_view, cnn_out_channels)
-        transformer_input_tokens = cnn_output_tokens.reshape(
-            batch_size,
-            self.max_total_tokens_in_view,
-            cnn_out_channels
-        )
+        transformer_input_tokens = cnn_output_tokens#.reshape(
+            # batch_size,
+            # self.max_total_tokens_in_view,
+            # cnn_out_channels
+        # )
 
         # Create original token indices for the full view
         original_indices_full_view = torch.arange(self.max_total_tokens_in_view, device=transformer_input_tokens.device)
