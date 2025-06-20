@@ -87,8 +87,8 @@ def train(model: Module,
 
         for batch_idx, data_batch in enumerate(data_train_loader):
             data_batch_x, data_batch_y = data_batch
-            data_batch_x = data_batch_x.to(device)
-            data_batch_y = data_batch_y.to(device)
+            data_batch_x = data_batch_x.float().to(device)
+            data_batch_y = data_batch_y.float().to(device)
 
             if model.training:
                 data_batch_x = apply_augmentation(data_batch_x)
@@ -115,8 +115,8 @@ def train(model: Module,
         model.eval()
         with torch.no_grad():
             data_test_x, data_test_y = next(iter(data_test_loader))
-            data_test_x = data_test_x.to(device)
-            data_test_y = data_test_y.to(device)
+            data_test_x = data_test_x.float().to(device)
+            data_test_y = data_test_y.float().to(device)
             if var_mode == "count_classification":
                 data_test_y = data_test_y.sum(axis=1)
             if var_mode == "baseline":

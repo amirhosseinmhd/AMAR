@@ -17,12 +17,13 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 2,
+    "repeat": 3,
     ## path of data
     "path": {
-
-        "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",               # directory of CSI amplitude files
-        "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",             # path of annotation file
+        # "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",  # directory of CSI amplitude files
+        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
+        # "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",  # path of annotation file
+        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -57,18 +58,18 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.3,  # label smoothing factor
+            "label_smoothing": 0.25,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
         "weight_decay": 2e-4,
-        "num_obj_queries": 7,
-        "num_decoder_layers": 8,
+        "num_obj_queries": 5,
+        "num_decoder_layers": 6,
         "dim_FFN": 512,
-        "token_length": 200,
-        "d_embedding": 64,
+        "token_length": 150,
+        "d_embedding": 100,
         "n_attention_heads": 8,
-        "query_dropout_rate": 0.65
+        "query_dropout_rate": 0.0
     },
     ## encoding of activities and locations
     "encoding": {
