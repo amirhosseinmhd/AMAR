@@ -459,15 +459,15 @@ class PCAFeatureExtractor(nn.Module):
 
         pca_output_dim = self.pca_components.shape[1]
         c_initial = 64  # Channels after initial convolution
-        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
+        c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
 
         # 1. Low-pass filter after PCA
-        self.low_pass_conv = nn.Conv1d(pca_output_dim, 32, kernel_size=5, padding=2)
-        self.bn_initial = nn.BatchNorm1d(32)
+        self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
+        self.bn_initial = nn.BatchNorm1d(48)
         self.relu_initial = nn.ReLU()
 
-        self.ds_conv1 = DepthwiseSeparableConv(32, 64, kernel_size=5, padding=2, stride=2)  # T: 200 -> 100
-        self.bn_ds1 = nn.BatchNorm1d(c_initial)
+        self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=2)  # T: 200 -> 100
+        self.bn_ds1 = nn.BatchNorm1d(64)
         self.relu_ds1 = nn.ReLU()
 
         # 2. Hierarchical Dilated Convolutions (on T=100)
@@ -993,7 +993,7 @@ def run_that_detr(data_train_x,
     #
     # Compute PCA components
     data_train_x_mean = np.mean(data_train_x, axis=1)
-    pca = PCA(n_components=32)
+    pca = PCA(n_components=50)
     pca.fit(data_train_x_mean)
     pca_components = torch.from_numpy(pca.components_.T).float().to(device)
     #
@@ -1018,18 +1018,18 @@ def run_that_detr(data_train_x,
     result_avg_count_error = []
 
     #
-    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape,
-                                    n_attention_heads=preset["nn"]["n_attention_heads"],
-                                    features_dim=preset["nn"]["d_embedding"],
-                                    embedding_time_dim=preset["nn"]["token_length"],
-                                    num_decoder_layers=preset["nn"]["num_decoder_layers"],
-                                    temp_cross=preset["nn"]["cross_attention_temp"],
-                                    num_queries=preset["nn"]["num_obj_queries"],
-                                    dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),
-                                                     var_x_shape, as_strings=False)
-
-    print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
+    # var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape,
+    #                                 n_attention_heads=preset["nn"]["n_attention_heads"],
+    #                                 features_dim=preset["nn"]["d_embedding"],
+    #                                 embedding_time_dim=preset["nn"]["token_length"],
+    #                                 num_decoder_layers=preset["nn"]["num_decoder_layers"],
+    #                                 temp_cross=preset["nn"]["cross_attention_temp"],
+    #                                 num_queries=preset["nn"]["num_obj_queries"],
+    #                                 dim_feedforward=preset["nn"]["dim_FFN"],
+    #                                 query_dropout_rate=preset["nn"]["query_dropout_rate"]),
+    #                                                  var_x_shape, as_strings=False)
+    #
+    # print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
     #
 
