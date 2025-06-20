@@ -68,7 +68,7 @@ preset = {
         "dim_FFN": 512,
         "token_length": 150,
         "d_embedding": 100,
-        "n_attention_heads": 8,
+        "n_attention_heads": 10,
         "query_dropout_rate": 0.0
     },
     ## encoding of activities and locations
