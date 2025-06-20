@@ -6,6 +6,7 @@ import time
 import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 #
 import torch.nn as nn
 from torch.utils.data import TensorDataset
@@ -447,6 +448,98 @@ class CNNFeatureExtractor(nn.Module):
         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
+class PCAFeatureExtractor(nn.Module):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
+        super(PCAFeatureExtractor, self).__init__()
+        self.embedding_time_dim = embedding_time_dim
+
+        if pca_components is None:
+            raise ValueError("PCA components must be provided.")
+        self.register_buffer('pca_components', pca_components)
+
+        pca_output_dim = self.pca_components.shape[1]
+        c_initial = 64  # Channels after initial convolution
+        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
+
+        # 1. Low-pass filter after PCA
+        self.low_pass_conv = nn.Conv1d(pca_output_dim, 32, kernel_size=5, padding=2)
+        self.bn_initial = nn.BatchNorm1d(32)
+        self.relu_initial = nn.ReLU()
+
+        self.ds_conv1 = DepthwiseSeparableConv(32, 64, kernel_size=5, padding=2, stride=2)  # T: 200 -> 100
+        self.bn_ds1 = nn.BatchNorm1d(c_initial)
+        self.relu_ds1 = nn.ReLU()
+
+        # 2. Hierarchical Dilated Convolutions (on T=100)
+        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
+        self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+
+        # 3. Second Temporal Reduction (T: 100 -> 50)
+        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2)  # T: 100 -> 50
+        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+        self.relu_ds2 = nn.ReLU()
+
+        # 4. Channel Adjustment to output_channels (T: 50)
+        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+        self.bn_adjust = nn.BatchNorm1d(output_channels)
+        self.relu_adjust = nn.ReLU()
+
+        # 5. Parallel Dilated Convolutions (on T=50)
+        self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
+        self.bn_parallel = nn.BatchNorm1d(output_channels)
+        self.relu_parallel = nn.ReLU()
+
+        # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
+        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+                                              kernel_size=5, stride=5, padding=2)
+        self.bn_final = nn.BatchNorm1d(output_channels)
+        self.relu_final = nn.ReLU()
+
+    def forward(self, x):
+        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+        # PCA projection
+        x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+
+        x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+
+        # 1. Low-pass filter
+        x = self.low_pass_conv(x)  # (B, 128, 200)
+        x = self.bn_initial(x)
+        x = self.relu_initial(x)
+
+        x = self.ds_conv1(x)  # T: 200 -> 100
+        x = self.bn_ds1(x)
+        x = self.relu_ds1(x)
+
+        # 2. Hierarchical Dilated Convolutions
+        x = self.hierarchical_dilated_1(x)
+        x = self.hierarchical_dilated_2(x)
+        x = self.hierarchical_dilated_3(x)  # Channels: c_initial -> c_hierarchical_out =64
+
+        # 3. Second Temporal Reduction
+        x = self.ds_conv2(x)  # T: 100 -> 50
+        x = self.bn_ds2(x)
+        x = self.relu_ds2(x)
+
+        # 4. Channel Adjustment
+        x = self.channel_adjust_before_parallel(x)  # Channels: c_hierarchical_out -> output_channels
+        x = self.bn_adjust(x)
+        x = self.relu_adjust(x)
+
+        # 5. Parallel Dilated Convolutions
+        x = self.parallel_dilated_blocks(x)
+        x = self.bn_parallel(x)
+        x = self.relu_parallel(x)
+
+        # 6. Final Temporal Reduction
+        x = self.final_reduction_conv(x)  # T: 50 -> embedding_time_dim (approx)
+        x = self.bn_final(x)
+        x = self.relu_final(x)
+
+        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
+
+
 class Transformer_Encoder(torch.nn.Module):
     #
     ##
@@ -654,9 +747,12 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 class DETR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0,
+                 pca_components=None):
         super().__init__()
-        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        self.feature_extractor = PCAFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,
+                                                     embedding_time_dim=embedding_time_dim, pca_components=pca_components)
         var_embedding_shape = (embedding_time_dim, features_dim)
         self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
                                            num_transformer_encoder_layers=4)
@@ -694,8 +790,8 @@ class DETR_MultiUser(nn.Module):
         # If the feature extractor is frozen (e.g., its parameters do not require gradients),
         # detach its output. This prevents unnecessary gradient computations for the frozen part
         # and can save memory. We check a representative parameter's requires_grad status.
-        if not self.feature_extractor.initial_conv.weight.requires_grad:
-            extracted_features = extracted_features.detach()
+        # if not self.feature_extractor.initial_conv.weight.requires_grad:
+        #     extracted_features = extracted_features.detach()
         
         # extracted_features will have shape:
         # (batch_size * num_segments, T_out_segment, features_dim)
@@ -728,7 +824,7 @@ class HungarianMatchingLoss(nn.Module):
         weights = weights * (len(weights) / weights.sum())
 
         self.ce_loss = nn.CrossEntropyLoss(
-            weight=weights.to(torch.device('cuda')),
+            weight=weights.to(torch.device("cuda" if torch.cuda.is_available() else "mps")),
             label_smoothing=label_smoothing
         )
 
@@ -874,7 +970,7 @@ def run_that_detr(data_train_x,
     """
     #
     ##
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps")
     #
     ##
     ## ============================================ Preprocess ============================================
@@ -894,6 +990,12 @@ def run_that_detr(data_train_x,
     data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
+    #
+    # Compute PCA components
+    data_train_x_mean = np.mean(data_train_x, axis=1)
+    pca = PCA(n_components=32)
+    pca.fit(data_train_x_mean)
+    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
     #
     ## shape for model
     var_x_shape = data_train_x[0].shape
@@ -959,7 +1061,8 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]).to(device) 
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    pca_components=pca_components).to(device)
         # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
@@ -1014,7 +1117,7 @@ def run_that_detr(data_train_x,
         model_detr.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_detr(torch.from_numpy(data_test_x).to(device))
+            predict_test_y = model_detr(torch.from_numpy(data_test_x).float().to(device))
         #
         # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
         predict_test_y = predict_test_y.detach().cpu().numpy()
