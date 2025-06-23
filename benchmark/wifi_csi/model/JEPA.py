@@ -1593,29 +1593,24 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     jepa_dataset = JEPADataset(data_x)
     dataloader = DataLoader(jepa_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
     
-    # Initialize JEPA model
     jepa_model = JEPA_Model().to(device)
     jepa_model.max_iters = num_epochs * len(dataloader)  # Set max iterations for EMA updates
 
-    # Calculate model complexity
     macs, params = get_model_complexity_info(JEPA_Model(), var_x_shape, as_strings=False)
     print(f"Model Parameters: {params:,}, FLOPs: {macs * 2:,}")
     
-    # Create optimizer
     optimizer = optim.AdamW(
         jepa_model.parameters(),
         lr=preset["nn"]["lr"],
         weight_decay=preset["nn"]["weight_decay"]
     )
     
-    # Create checkpoint directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     checkpoint_dir = os.path.join(
         preset["path"].get("models_dir", "./saved_models"), 
         f"jepa_ssl_{'+'.join(environments)}_{timestamp}"
     )
     
-    # Train the model
     print("Starting JEPA SSL training...")
     best_state_dict = train_jepa(
         jepa_model=jepa_model,
@@ -1628,7 +1623,6 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
         checkpoint_interval=50  
     )
     
-    # Save the final model
     model_filename = f"jepa_ssl_final_{'+'.join(environments)}_{timestamp}.pth"
     model_path = os.path.join(checkpoint_dir, model_filename)
     
@@ -1640,7 +1634,6 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     
     print(f"Final model saved to {model_path}")
     
-    # Save training results
     results = {
         "model": "JEPA_SSL",
         "environment": environments,
@@ -1655,7 +1648,6 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     
     return best_state_dict
 
-# Add helper function to resume training from a checkpoint
 def resume_jepa_training(checkpoint_path, environments=None, num_epochs=None, batch_size=None):
     """
     Resume JEPA training from a checkpoint
@@ -1672,11 +1664,9 @@ def resume_jepa_training(checkpoint_path, environments=None, num_epochs=None, ba
     if not os.path.exists(checkpoint_path):
         raise ValueError(f"Checkpoint file not found: {checkpoint_path}")
     
-    # Load checkpoint to get config
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     config = checkpoint.get('config', {})
     
-    # Use provided parameters or fall back to checkpoint config
     if environments is None and "environment" in config:
         environments = config["environment"]
     elif environments is None:
@@ -1692,7 +1682,6 @@ def resume_jepa_training(checkpoint_path, environments=None, num_epochs=None, ba
     elif batch_size is None:
         batch_size = 16
     
-    # Resume training
     return run_jepa(
         environments=environments,
         num_epochs=num_epochs,
@@ -1713,7 +1702,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Update preset with command-line arguments for correct logging to wandb
     preset["nn"]["epoch"] = args.epochs
     preset["data"]["environment"] = args.envs
     preset["batch_size"] = args.batch_size
