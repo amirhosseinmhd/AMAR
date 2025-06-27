@@ -1256,8 +1256,7 @@ def generate_tsne_visualizations(model, environments, device, epoch):
         tsne_model = TSNE(
             n_components=2, 
             perplexity=min(50, max(5, len(representations_np) // 5)),
-            max_iter=1000, 
-            random_state=42, 
+            random_state=42,
             n_jobs=-1,
             init='pca', 
             learning_rate='auto'
@@ -1305,7 +1304,7 @@ def generate_tsne_visualizations(model, environments, device, epoch):
         tsne_model = TSNE(
             n_components=2, 
             perplexity=min(50, max(5, len(representations_np) // 5)),
-            max_iter=1000, 
+            # max_iter=1000,
             random_state=42, 
             n_jobs=-1,
             init='pca', 
@@ -1406,7 +1405,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             'prediction_coeff': prediction_coeff
         },
         reinit=True,
-        mode="offline"
+        mode="online"
     )
     
     start_epoch = 0
@@ -1690,7 +1689,7 @@ def visualize_jepa_representations(model_state_dict, environments_to_load, devic
 
     # 4. ========== Compute t-SNE ==========
     print("Computing t-SNE... ")
-    tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42, n_jobs=-1)
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42, n_jobs=-1)
     tsne_results = tsne.fit_transform(representations_np)
     print("t-SNE computation complete.")
 
@@ -1980,5 +1979,3 @@ if __name__ == "__main__":
             batch_size=args.batch_size
         )
 
-    # visualize_jepa_representations(model_state_dict=state_dicts, environments_to_load=["classroom", "meeting_room", "empty_room"],
-    #                                device=torch.device('mps'))
