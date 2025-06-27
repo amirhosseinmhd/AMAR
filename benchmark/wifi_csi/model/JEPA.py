@@ -8,6 +8,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 from pandas import DataFrame
 from copy import deepcopy
+from sklearn.decomposition import PCA
 import os
 import math
 import json
@@ -27,7 +28,7 @@ from utils import *
 from utils import NumpyEncoder
 
 # Compute dynamic configuration values
-preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 20)
+preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 40)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -298,6 +299,96 @@ class ChannelAttention(nn.Module):
         return x * y
 
 
+class PCAFeatureExtractor(nn.Module):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
+        super(PCAFeatureExtractor, self).__init__()
+        self.embedding_time_dim = embedding_time_dim
+
+        if pca_components is None:
+            raise ValueError("PCA components must be provided.")
+        self.register_buffer('pca_components', pca_components)
+
+        pca_output_dim = self.pca_components.shape[1]
+        c_initial = 64  # Channels after initial convolution
+        c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
+
+        # 1. Low-pass filter after PCA
+        self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
+        self.bn_initial = nn.BatchNorm1d(48)
+        self.relu_initial = nn.ReLU()
+
+        self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=4)  # T: 200 -> 50
+        self.bn_ds1 = nn.BatchNorm1d(64)
+        self.relu_ds1 = nn.ReLU()
+
+        # 2. Hierarchical Dilated Convolutions (on T=50)
+        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
+        # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+
+        # 3. Second Temporal Reduction (T: 50 -> 25)
+        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2)  # T: 100 -> 50
+        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+        self.relu_ds2 = nn.ReLU()
+
+        # 4. Channel Adjustment to output_channels (T: 25)
+        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+        self.bn_adjust = nn.BatchNorm1d(output_channels)
+        self.relu_adjust = nn.ReLU()
+
+        # 5. Parallel Dilated Convolutions (on T=25)
+        self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
+        self.bn_parallel = nn.BatchNorm1d(output_channels)
+        self.relu_parallel = nn.ReLU()
+
+        # 6. Final Temporal Reduction (from T=25 to 5)
+        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+                                              kernel_size=5, stride=5, padding=2)
+        self.bn_final = nn.BatchNorm1d(output_channels)
+        self.relu_final = nn.ReLU()
+
+    def forward(self, x):
+        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+        # PCA projection
+        x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+
+        x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+
+        # 1. Low-pass filter
+        x = self.low_pass_conv(x)  # (B, 128, 200)
+        x = self.bn_initial(x)
+        x = self.relu_initial(x)
+
+        x = self.ds_conv1(x)  # T: 200 -> 100
+        x = self.bn_ds1(x)
+        x = self.relu_ds1(x)
+
+        # 2. Hierarchical Dilated Convolutions
+        x = self.hierarchical_dilated_1(x)
+        x = self.hierarchical_dilated_2(x)
+        # x = self.hierarchical_dilated_3(x)  # Channels: c_initial -> c_hierarchical_out =64
+
+        # 3. Second Temporal Reduction
+        x = self.ds_conv2(x)  # T: 100 -> 50
+        x = self.bn_ds2(x)
+        x = self.relu_ds2(x)
+
+        # 4. Channel Adjustment
+        x = self.channel_adjust_before_parallel(x)  # Channels: c_hierarchical_out -> output_channels
+        x = self.bn_adjust(x)
+        x = self.relu_adjust(x)
+
+        # 5. Parallel Dilated Convolutions
+        x = self.parallel_dilated_blocks(x)
+        x = self.bn_parallel(x)
+        x = self.relu_parallel(x)
+
+        # 6. Final Temporal Reduction
+        x = self.final_reduction_conv(x)  # T: 50 -> embedding_time_dim (approx)
+        x = self.bn_final(x)
+        x = self.relu_final(x)
+
+        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
 class CNNFeatureExtractor(nn.Module):
@@ -693,7 +784,7 @@ class JEPA_Model(nn.Module):
     a segment/block sampler, and a predictor (to be fully implemented).
     The goal is to predict representations of target blocks using representations of context blocks.
     """
-    def __init__(self):
+    def __init__(self, pca_components=None):
         super().__init__()
         # Number of tokens generated by the CNN for each segment.
         self.tokens_per_segment = preset["cnn_embedding_time_dim"]
@@ -702,11 +793,15 @@ class JEPA_Model(nn.Module):
         self.total_num_epoch = preset["nn"]["epoch"]
 
         # --- Online Encoder (learnable) ---
-        self.online_cnn_feature_extractor = CNNFeatureExtractor(
-            input_channels=270,
-            output_channels=preset["nn"]["d_embedding"],
-            embedding_time_dim=preset["cnn_embedding_time_dim"] # This is tokens_per_segment for the CNN
-        )
+        # self.online_cnn_feature_extractor = CNNFeatureExtractor(
+        #     input_channels=270,
+        #     output_channels=preset["nn"]["d_embedding"],
+        #     embedding_time_dim=preset["cnn_embedding_time_dim"] # This is tokens_per_segment for the CNN
+        # )
+        self.online_cnn_feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"],
+                                                     embedding_time_dim=preset["cnn_embedding_time_dim"],
+                                                                pca_components=pca_components)
+
         self.online_transformer_encoder = Transformer_Encoder(
             d_model=preset["nn"]["d_embedding"],             # Feature dimension of tokens.
             nhead=preset["nn"]["n_attention_heads"],
@@ -931,10 +1026,10 @@ class JEPA_Model(nn.Module):
         # Reshape for CNN:
         # (batch_size, num_total_segments * segment_len, input_channels) ->
         # (batch_size * num_total_segments, segment_len, input_channels)
-        cnn_input = x_full_view_batch#.reshape(
-            # batch_size* num_total_segments,segment_len,
-            # input_channels
-        # )
+        cnn_input = x_full_view_batch.reshape(
+            batch_size* num_total_segments,segment_len,
+            input_channels
+        )
 
         # Pass through CNN. Output shape:
         # (batch_size * num_total_segments, self.tokens_per_segment, cnn_out_channels)
@@ -943,11 +1038,11 @@ class JEPA_Model(nn.Module):
         # Reshape for Transformer:
         # (batch_size, num_total_segments * self.tokens_per_segment, cnn_out_channels)
         # which is (batch_size, self.max_total_tokens_in_view, cnn_out_channels)
-        transformer_input_tokens = cnn_output_tokens#.reshape(
-            # batch_size,
-            # self.max_total_tokens_in_view,
-            # cnn_out_channels
-        # )
+        transformer_input_tokens = cnn_output_tokens.reshape(
+            batch_size,
+            self.max_total_tokens_in_view,
+            cnn_out_channels
+         )
 
         # Create original token indices for the full view
         original_indices_full_view = torch.arange(self.max_total_tokens_in_view, device=transformer_input_tokens.device)
@@ -1631,7 +1726,7 @@ def encode_activity(data_pd_y,
     data_activity_onehot_y = np.array([[var_encoding[var_y] for var_y in var_sample] for var_sample in data_activity_y])
     #
     return data_activity_onehot_y
-def visualize_jepa_representations(model_state_dict, environments_to_load, device):
+def visualize_jepa_representations(model_state_dict, environments_to_load, device,pca_components=None):
     """
     Loads a trained JEPA model, extracts representations from a dataset,
     and generates three types of t-SNE visualizations.
@@ -1640,7 +1735,7 @@ def visualize_jepa_representations(model_state_dict, environments_to_load, devic
     
     # 1. ========== Load Model ==========
 
-    model = JEPA_Model().to(device)
+    model = JEPA_Model(pca_components=pca_components).to(device)
     model.load_state_dict(model_state_dict)
     model.eval()
 
@@ -1847,15 +1942,19 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     # Reshape data to match expected input format
     data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
     var_x_shape = data_x[0].shape
-    
+
+    data_x_mean = np.mean(data_x, axis=1)
+    pca = PCA(n_components=50)
+    pca.fit(data_x_mean)
+    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
     # Create dataset and dataloader
     jepa_dataset = JEPADataset(data_x)
     dataloader = DataLoader(jepa_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
     
-    jepa_model = JEPA_Model().to(device)
+    jepa_model = JEPA_Model(pca_components=pca_components).to(device)
     jepa_model.max_iters = num_epochs * len(dataloader)  # Set max iterations for EMA updates
 
-    macs, params = get_model_complexity_info(JEPA_Model(), var_x_shape, as_strings=False)
+    macs, params = get_model_complexity_info(JEPA_Model(pca_components=pca_components.to(torch.device('cpu'))), var_x_shape, as_strings=False)
     print(f"Model Parameters: {params:,}, FLOPs: {macs * 2:,}")
     
     optimizer = optim.AdamW(
