@@ -28,6 +28,191 @@ from utils import NumpyEncoder
 
 # Compute dynamic configuration values
 preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 20)
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VICRegLoss(nn.Module):
+    """
+    VICReg Loss implementation for C-JEPA following the exact pseudocode:
+    - sim_loss: between context and target embeddings
+    - std_loss: applied only to context embeddings
+    - cov_loss: applied only to context embeddings
+    """
+    
+    def __init__(self, 
+                 std_coeff=25.0,
+                 cov_coeff=1.0,
+                 gamma=1.0,
+                 eps=1e-4):
+        """
+        Args:
+            sim_coeff: Coefficient for similarity (invariance) loss
+            std_coeff: Coefficient for variance loss  
+            cov_coeff: Coefficient for covariance loss
+            gamma: Target standard deviation for variance regularization
+            eps: Small value for numerical stability
+        """
+        super().__init__()
+        self.std_coeff = std_coeff
+        self.cov_coeff = cov_coeff
+        self.gamma = gamma
+        self.eps = eps
+
+    
+    def variance_loss(self, z):
+        """
+        Variance loss: Ensures representation variance doesn't collapse
+        Args:
+            z: Tensor of shape (batch_size, feature_dim)
+        """
+        batch_size, feature_dim = z.shape
+        std_z = torch.sqrt(z.var(dim=0) + self.eps)  # Standard deviation along batch dimension
+        std_loss = torch.mean(F.relu(self.gamma - std_z))  # Hinge loss
+        return std_loss
+    
+    def covariance_loss(self, z):
+        """
+        Covariance loss: Decorrelates features by minimizing off-diagonal covariance
+        Args:
+            z: Tensor of shape (batch_size, feature_dim)
+        """
+        batch_size, feature_dim = z.shape
+        z_centered = z - z.mean(dim=0)  # Center the features
+        
+        # Compute covariance matrix
+        cov_matrix = torch.mm(z_centered.T, z_centered) / (batch_size - 1)
+        
+        # Zero out diagonal and sum squared off-diagonal elements
+        off_diag_mask = ~torch.eye(feature_dim, dtype=torch.bool, device=z.device)
+        cov_loss = (cov_matrix[off_diag_mask] ** 2).sum() / feature_dim
+        
+        return cov_loss
+    
+    def forward(self, predictions, actual_targets, z_context_pooled):
+        """
+        Compute VICReg regularization terms (variance and covariance only):
+        - std_loss: applied to context embeddings  
+        - cov_loss: applied to context embeddings
+        
+        Note: Invariance/similarity loss is handled separately as the main prediction loss
+        
+        Args:
+            predictions: Not used (kept for interface compatibility)
+            actual_targets: Not used (kept for interface compatibility) 
+            z_context_pooled: Pooled context representations, shape (batch_size, feature_dim)
+        
+        Returns:
+            dict: Dictionary with total loss and individual components
+        """
+        # VICReg regularization terms applied only to context embeddings
+        std_loss = self.variance_loss(z_context_pooled)
+        cov_loss = self.covariance_loss(z_context_pooled)
+        
+        # Total VICReg regularization (variance + covariance only)
+        total_loss = (self.std_coeff * std_loss + self.cov_coeff * cov_loss)
+        
+        return {
+            'std_loss': std_loss,
+            'cov_loss': cov_loss,
+            'total_loss': total_loss,
+        }
+
+
+class CombinedJEPALoss(nn.Module):
+    """
+    Combined loss for JEPA with VICReg regularization following C-JEPA pseudocode:
+    
+    The invariance loss is the same as the original JEPA prediction loss (MSE between predictions and targets).
+    VICReg adds variance and covariance regularization to context embeddings.
+    
+    total_loss = prediction_loss + beta_vicreg * (beta_std * std_loss + beta_cov * cov_loss)
+    """
+    
+    def __init__(self, 
+                 prediction_coeff=1.0,
+                 vicreg_coeff=0.001,
+                 vicreg_std_coeff=25.0,
+                 vicreg_cov_coeff=1.0):
+        """
+        Args:
+            prediction_coeff: Coefficient for original JEPA prediction loss (includes invariance)
+            vicreg_coeff: Coefficient for VICReg loss (β_vicreg in paper)
+            vicreg_std_coeff: VICReg variance coefficient
+            vicreg_cov_coeff: VICReg covariance coefficient
+        """
+        super().__init__()
+        self.prediction_coeff = prediction_coeff
+        self.vicreg_coeff = vicreg_coeff
+        
+        # Only need variance and covariance components since invariance = prediction loss
+        self.vicreg_loss = VICRegLoss(
+            std_coeff=vicreg_std_coeff,
+            cov_coeff=vicreg_cov_coeff
+        )
+    
+    def pool_representations(self, representations, mask=None):
+        """
+        Pool representations by averaging, considering padding mask if provided
+        
+        Args:
+            representations: Tensor of shape (batch_size, seq_len, feature_dim)
+            mask: Optional padding mask (True for padded positions)
+        
+        Returns:
+            Pooled representations of shape (batch_size, feature_dim)
+        """
+        if mask is not None:
+            # Mask out padded positions
+            mask_expanded = mask.unsqueeze(-1).expand_as(representations)
+            representations_masked = representations.masked_fill(mask_expanded, 0)
+            
+            # Count valid positions
+            valid_counts = (~mask).sum(dim=1, keepdim=True).float()
+            valid_counts = torch.clamp(valid_counts, min=1)  # Avoid division by zero
+            
+            # Average only over valid positions
+            pooled = representations_masked.sum(dim=1) / valid_counts
+        else:
+            # Simple average if no mask
+            pooled = representations.mean(dim=1)
+            
+        return pooled
+    
+    def forward(self, predictions, actual_targets, z_context_online, context_padding_mask):
+        """
+        Compute combined JEPA + VICReg loss where:
+        - Invariance loss is applied to predicted tokens vs actual target tokens (replaces JEPA prediction loss)
+        - Variance/Covariance losses are applied to context embeddings
+        
+        Args:
+            predictions: Predicted target representations from predictor
+            actual_targets: Actual target representations (ground truth)
+            z_context_online: Context representations, shape (batch_size, context_len, feature_dim)
+            context_padding_mask: Padding mask for context, shape (batch_size, context_len)
+        
+        Returns:
+            dict: Dictionary with total loss and individual components
+        """
+        # 1. Invariance loss: between predicted tokens and actual target tokens (this IS the prediction loss)
+        invariance_loss = F.mse_loss(predictions, actual_targets)
+        
+        # 2. Pool context representations for variance/covariance losses
+        z_context_pooled = self.pool_representations(z_context_online, context_padding_mask)
+        
+        # 3. Apply VICReg variance and covariance losses to context embeddings
+        vicreg_losses = self.vicreg_loss(predictions, actual_targets, z_context_pooled)
+        
+        # 4. Combined loss: invariance (prediction) + VICReg regularization terms
+        total_loss = self.prediction_coeff * invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
+        
+        return {
+            'total_loss': total_loss,
+            'vicreg_total_loss': vicreg_losses['total_loss'],
+            'vicreg_sim_loss': invariance_loss,  # Same as prediction loss
+            'vicreg_std_loss': vicreg_losses['std_loss'],
+            'vicreg_cov_loss': vicreg_losses['cov_loss']
+        }
 
 class JEPADataset(torch.utils.data.Dataset):
     """Custom dataset for JEPA training that only requires CSI data (no labels)"""
@@ -585,11 +770,11 @@ class JEPA_Model(nn.Module):
         return representations
     
     @torch.no_grad()
-    def _update_ema(self, iter):
+    def _update_ema(self, current_iter, total_iters):
         """Updates the target encoder's weights as an EMA of the online encoder's weights."""
 
         # 1. Calculate the scheduled decay rate for the current iteration
-        ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * iter / preset["nn"]["epoch"]) + 1) / 2
+        ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * current_iter / total_iters) + 1) / 2
         # ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * iter / self.max_iters) + 1) / 2
 
         # 2. Update the CNN parameters using the scheduled decay rate
@@ -600,6 +785,10 @@ class JEPA_Model(nn.Module):
                                               self.target_transformer_encoder.parameters()):
             target_param.data = target_param.data * ema_decay + online_param.data * (1. - ema_decay)
 
+    def update_ema(self, current_iter, total_iters):
+        """Wrapper to call the EMA update mechanism."""
+        self._update_ema(current_iter, total_iters)
+        
     """
            ************* # REWRITE THIS FUNCTION. WRITE IT USING TORCH INDEX ACESSING, FIRST RESHAPE IT and THEN SELECT SEGMENTS FROM IT USING TOECH   *************
     """
@@ -950,9 +1139,9 @@ class JEPA_Model(nn.Module):
             "sampling_info": sampling_info # Renamed from sampling_info_segments
         }
 
-    def update_ema(self, iter):
+    def update_ema(self, current_iter, total_iters):
         """Wrapper to call the EMA update mechanism."""
-        self._update_ema(iter)
+        self._update_ema(current_iter, total_iters)
 def save_checkpoint(state, is_best, checkpoint_dir, filename="checkpoint.pth"):
     """Save checkpoint to disk
     
@@ -1160,23 +1349,64 @@ def generate_tsne_visualizations(model, environments, device, epoch):
     return {"tsne_visualizations": fig}
 
 def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10, 
-               resume_from=None, checkpoint_dir=None, checkpoint_interval=10):
+                          resume_from=None, checkpoint_dir=None, checkpoint_interval=10,
+                          # VICReg hyperparameters
+                          prediction_coeff=1.0,
+                          vicreg_coeff=0.001,
+                          vicreg_std_coeff=25.0,
+                          vicreg_cov_coeff=1.0):
+    """
+    Train JEPA model with VICReg regularization where:
+    - Invariance loss = MSE between predictions and targets (main JEPA loss)
+    - Variance/Covariance losses are applied to context embeddings for regularization
+    
+    total_loss = prediction_loss + beta_vicreg * (beta_std * std_loss + beta_cov * cov_loss)
+    
+    Args:
+        jepa_model: JEPA model to train
+        dataloader: Training data loader
+        optimizer: Optimizer
+        device: Device to train on
+        num_epochs: Number of training epochs
+        resume_from: Path to checkpoint to resume from
+        checkpoint_dir: Directory to save checkpoints
+        checkpoint_interval: How often to save checkpoints
+        prediction_coeff: Coefficient for JEPA prediction loss (includes invariance)
+        vicreg_coeff: β_vicreg - coefficient for VICReg regularization terms
+        vicreg_std_coeff: β_std - variance coefficient
+        vicreg_cov_coeff: β_cov - covariance coefficient
+    """
     # Create checkpoint directory if provided
     if checkpoint_dir is None:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         checkpoint_dir = os.path.join(
             preset["path"].get("models_dir", "./saved_models"), 
-            f"jepa_ssl_checkpoints_{timestamp}"
+            f"jepa_vicreg_checkpoints_{timestamp}"
         )
     os.makedirs(checkpoint_dir, exist_ok=True)
     
+    # Initialize combined loss function
+    combined_loss_fn = CombinedJEPALoss(
+        prediction_coeff=prediction_coeff,
+        vicreg_coeff=vicreg_coeff,
+        vicreg_std_coeff=vicreg_std_coeff,
+        vicreg_cov_coeff=vicreg_cov_coeff
+    ).to(device)
+    
     # Set up wandb logging
-    run_name = f"JEPA_SSL_training_{'+'.join(preset['data']['environment'])}"
+    run_name = f"JEPA_VICReg_training_{'+'.join(preset['data']['environment'])}"
     run = wandb.init(
-        project="jepa_ssl",
+        project="jepa_vicreg",
         name=run_name,
-        config=preset,
-        reinit=True,mode="offline"
+        config={
+            **preset,
+            'vicreg_coeff': vicreg_coeff,
+            'vicreg_std_coeff': vicreg_std_coeff,
+            'vicreg_cov_coeff': vicreg_cov_coeff,
+            'prediction_coeff': prediction_coeff
+        },
+        reinit=True,
+        mode="offline"
     )
     
     start_epoch = 0
@@ -1194,11 +1424,19 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             print(f"Resuming from epoch {start_epoch} with best loss {best_loss:.4f}")
     
     jepa_model.train()
-    log_sampling_interval = preset["jepa"].get("log_sampling_stats_interval", 10)
+    
+    # Calculate total iterations for EMA updates
+    total_iters = num_epochs * len(dataloader)
+    current_iter = start_epoch * len(dataloader)
 
     for epoch in range(start_epoch, num_epochs):
         total_loss = 0
+        total_prediction_loss = 0
+        total_vicreg_loss = 0
+        total_vicreg_std_loss = 0
+        total_vicreg_cov_loss = 0
         num_batches = 0
+        
         for batch_idx, data_batch_x in enumerate(dataloader):
             # For JEPADataset, data_batch_x is just the tensor
             # For regular DataLoader with TensorDataset, data_batch_x is a tuple (data, _)
@@ -1221,7 +1459,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             if z_context_online.shape[1] == 0:
                 continue
             
-            # Prediction and loss calculation
+            # Prediction (same as before)
             b, num_blocks, tokens_per_block, d = actual_targets_for_loss.shape
             
             # 1. Reshape targets to fold the 'num_blocks' dimension into the batch dimension
@@ -1241,28 +1479,59 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
                 expanded_context_indices
             )
             
-            # 4. Calculate loss
-            loss = F.mse_loss(predictions, actual_targets)
+            # 4. Calculate combined loss (Invariance as prediction loss + VICReg regularization)
+            loss_dict = combined_loss_fn(
+                predictions=predictions,
+                actual_targets=actual_targets,
+                z_context_online=z_context_online,
+                context_padding_mask=context_padding_mask
+            )
+            
+            loss = loss_dict['total_loss']
             
             # Backward and optimize
             loss.backward()
             optimizer.step()
+            
+            # Update EMA model after each iteration
+            current_iter += 1
+            jepa_model.update_ema(current_iter=current_iter, total_iters=total_iters)
 
-            # Logging
+            # Accumulate losses for logging
             total_loss += loss.item()
+            total_prediction_loss += loss_dict['vicreg_sim_loss'].item()
+            total_vicreg_loss += loss_dict['vicreg_total_loss'].item()
+            total_vicreg_std_loss += loss_dict['vicreg_std_loss'].item()
+            total_vicreg_cov_loss += loss_dict['vicreg_cov_loss'].item()
             num_batches += 1
-        jepa_model.update_ema(iter=epoch)  # )
+        
+        # Removed the epoch-level EMA update since we now update per iteration
 
         # Epoch-level logging
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0
-        print(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
+        if num_batches > 0:
+            avg_loss = total_loss / num_batches
+            avg_prediction_loss = total_prediction_loss / num_batches
+            avg_vicreg_loss = total_vicreg_loss / num_batches
+            avg_vicreg_std_loss = total_vicreg_std_loss / num_batches
+            avg_vicreg_cov_loss = total_vicreg_cov_loss / num_batches
+        else:
+            avg_loss = avg_prediction_loss = avg_vicreg_loss = 0
+            avg_vicreg_std_loss = avg_vicreg_cov_loss = 0
+
+        print(f"Epoch {epoch}, Total Loss: {avg_loss:.4f}, "
+              f"Prediction Loss: {avg_prediction_loss:.4f}, "
+              f"VICReg Loss: {avg_vicreg_loss:.4f}")
 
         wandb.log({
             "epoch": epoch,
-            "ssl_loss": avg_loss,
+            "total_loss": avg_loss,
+            "prediction_loss": avg_prediction_loss,
+            "vicreg_total_loss": avg_vicreg_loss,
+            "vicreg_std_loss": avg_vicreg_std_loss,
+            "vicreg_cov_loss": avg_vicreg_cov_loss,
         }, step=epoch)
 
-        # Generate t-SNE visualizations every 15 epochs or on the last epoch
+        # Generate t-SNE visualizations every 25 epochs or on the last epoch
         if epoch % 25 == 0 or epoch == num_epochs - 1:
             print(f"Generating t-SNE visualizations at epoch {epoch}...")
             tsne_figure_dict = generate_tsne_visualizations(
@@ -1302,7 +1571,13 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'best_loss': best_loss,
                 'best_state_dict': best_state_dict,  # Always include the best model state
-                'config': preset
+                'config': preset,
+                'vicreg_params': {
+                    'vicreg_coeff': vicreg_coeff,
+                    'vicreg_std_coeff': vicreg_std_coeff,
+                    'vicreg_cov_coeff': vicreg_cov_coeff,
+                    'prediction_coeff': prediction_coeff
+                }
             }
             
             # Save the current checkpoint
@@ -1320,7 +1595,13 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
                     'model_state_dict': best_state_dict,  # Use the best state dict
                     'optimizer_state_dict': optimizer.state_dict(),
                     'best_loss': best_loss,
-                    'config': preset
+                    'config': preset,
+                    'vicreg_params': {
+                    'vicreg_coeff': vicreg_coeff,
+                    'vicreg_std_coeff': vicreg_std_coeff,
+                    'vicreg_cov_coeff': vicreg_cov_coeff,
+                    'prediction_coeff': prediction_coeff
+                    }
                 }
                 # Only save the best model file at intervals to avoid frequent disk writes
                 torch.save(best_checkpoint, os.path.join(checkpoint_dir, 'best_model.pth'))
@@ -1328,27 +1609,6 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     
     wandb.finish()
     return best_state_dict
-def create_tsne_plot(tsne_results, labels, title, legend_title):
-    """Creates and saves a t-SNE scatter plot."""
-    df = DataFrame(tsne_results, columns=['tsne1', 'tsne2'])
-    df['label'] = labels
-    
-    plt.figure(figsize=(12, 8))
-    sns.scatterplot(
-        x="tsne1", y="tsne2",
-        hue="label",
-        palette=sns.color_palette("hls", len(df['label'].unique())),
-        data=df,
-        legend="full",
-        alpha=0.8
-    ).set_title(title, fontsize=16)
-    
-    plt.legend(title=legend_title)
-    # Save the plot with a filename derived from the title
-    # save_filename = title.lower().replace(" ", "_") + ".png"
-    # plt.savefig(save_filename)
-    # print(f"Saved plot to {save_filename}")
-    plt.show()
 
 def encode_activity(data_pd_y,
                     var_encoding=preset["encoding"]["activity"]):
