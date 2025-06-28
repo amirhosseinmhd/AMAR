@@ -300,7 +300,7 @@ class ChannelAttention(nn.Module):
 
 
 class PCAFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
+    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=1, pca_components=None):
         super(PCAFeatureExtractor, self).__init__()
         self.embedding_time_dim = embedding_time_dim
 
@@ -309,183 +309,238 @@ class PCAFeatureExtractor(nn.Module):
         self.register_buffer('pca_components', pca_components)
 
         pca_output_dim = self.pca_components.shape[1]
-        c_initial = 64  # Channels after initial convolution
-        c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
+        c_intermediate = 64  # Intermediate channel size
 
-        # 1. Low-pass filter after PCA
-        self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
-        self.bn_initial = nn.BatchNorm1d(48)
-        self.relu_initial = nn.ReLU()
+        # 1. Simplified feature extraction and temporal reduction
+        # This single layer replaces the low-pass filter and the first ds_conv
+        # Assuming input time is 40, stride=4 reduces it to 10
+        self.feature_extractor = DepthwiseSeparableConv(pca_output_dim, c_intermediate, kernel_size=5, padding=2, stride=4)
+        self.bn1 = nn.BatchNorm1d(c_intermediate)
+        self.relu1 = nn.ReLU()
 
-        self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=4)  # T: 200 -> 50
-        self.bn_ds1 = nn.BatchNorm1d(64)
-        self.relu_ds1 = nn.ReLU()
+        # 2. Channel Adjustment
+        self.channel_adjust = nn.Conv1d(c_intermediate, output_channels, kernel_size=1)
+        self.bn2 = nn.BatchNorm1d(output_channels)
+        self.relu2 = nn.ReLU()
 
-        # 2. Hierarchical Dilated Convolutions (on T=50)
-        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
-        # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
-
-        # 3. Second Temporal Reduction (T: 50 -> 25)
-        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2)  # T: 100 -> 50
-        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-        self.relu_ds2 = nn.ReLU()
-
-        # 4. Channel Adjustment to output_channels (T: 25)
-        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-        self.bn_adjust = nn.BatchNorm1d(output_channels)
-        self.relu_adjust = nn.ReLU()
-
-        # 5. Parallel Dilated Convolutions (on T=25)
-        self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
-        self.bn_parallel = nn.BatchNorm1d(output_channels)
-        self.relu_parallel = nn.ReLU()
-
-        # 6. Final Temporal Reduction (from T=25 to 5)
-        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-                                              kernel_size=5, stride=5, padding=2)
+        # 3. Final Temporal Reduction to a single token
+        # From T=10 to T=1. Kernel size 10 and stride 10 will map 10 -> 1.
+        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels, kernel_size=10, stride=10)
         self.bn_final = nn.BatchNorm1d(output_channels)
         self.relu_final = nn.ReLU()
 
     def forward(self, x):
-        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+        # Input x shape: (batch, time, channels_in) e.g. (B, 40, 270)
         # PCA projection
-        x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+        x = torch.matmul(x, self.pca_components)  # (B, 40, pca_dim)
 
-        x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+        x = x.permute(0, 2, 1)  # (batch, pca_dim, time) e.g. (B, pca_dim, 40)
 
-        # 1. Low-pass filter
-        x = self.low_pass_conv(x)  # (B, 128, 200)
-        x = self.bn_initial(x)
-        x = self.relu_initial(x)
+        # 1. Feature extraction and temporal reduction
+        x = self.feature_extractor(x)  # T: 40 -> 10
+        x = self.bn1(x)
+        x = self.relu1(x)
 
-        x = self.ds_conv1(x)  # T: 200 -> 100
-        x = self.bn_ds1(x)
-        x = self.relu_ds1(x)
+        # 2. Channel Adjustment
+        x = self.channel_adjust(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
 
-        # 2. Hierarchical Dilated Convolutions
-        x = self.hierarchical_dilated_1(x)
-        x = self.hierarchical_dilated_2(x)
-        # x = self.hierarchical_dilated_3(x)  # Channels: c_initial -> c_hierarchical_out =64
-
-        # 3. Second Temporal Reduction
-        x = self.ds_conv2(x)  # T: 100 -> 50
-        x = self.bn_ds2(x)
-        x = self.relu_ds2(x)
-
-        # 4. Channel Adjustment
-        x = self.channel_adjust_before_parallel(x)  # Channels: c_hierarchical_out -> output_channels
-        x = self.bn_adjust(x)
-        x = self.relu_adjust(x)
-
-        # 5. Parallel Dilated Convolutions
-        x = self.parallel_dilated_blocks(x)
-        x = self.bn_parallel(x)
-        x = self.relu_parallel(x)
-
-        # 6. Final Temporal Reduction
-        x = self.final_reduction_conv(x)  # T: 50 -> embedding_time_dim (approx)
+        # 3. Final Temporal Reduction
+        x = self.final_reduction_conv(x)  # T: 10 -> 1
         x = self.bn_final(x)
         x = self.relu_final(x)
 
-        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
+        # Output shape: (batch, 1, output_channels)
+        return x.permute(0, 2, 1)
+
+# class PCAFeatureExtractor(nn.Module):
+#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
+#         super(PCAFeatureExtractor, self).__init__()
+#         self.embedding_time_dim = embedding_time_dim
+
+#         if pca_components is None:
+#             raise ValueError("PCA components must be provided.")
+#         self.register_buffer('pca_components', pca_components)
+
+#         pca_output_dim = self.pca_components.shape[1]
+#         c_initial = 64  # Channels after initial convolution
+#         c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
+
+#         # 1. Low-pass filter after PCA
+#         self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
+#         self.bn_initial = nn.BatchNorm1d(48)
+#         self.relu_initial = nn.ReLU()
+
+#         self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=4)  # T: 200 -> 50
+#         self.bn_ds1 = nn.BatchNorm1d(64)
+#         self.relu_ds1 = nn.ReLU()
+
+#         # 2. Hierarchical Dilated Convolutions (on T=50)
+#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
+#         # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+
+#         # 3. Second Temporal Reduction (T: 50 -> 25)
+#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2)  # T: 100 -> 50
+#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+#         self.relu_ds2 = nn.ReLU()
+
+#         # 4. Channel Adjustment to output_channels (T: 25)
+#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+#         self.bn_adjust = nn.BatchNorm1d(output_channels)
+#         self.relu_adjust = nn.ReLU()
+
+#         # 5. Parallel Dilated Convolutions (on T=25)
+#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
+#         self.bn_parallel = nn.BatchNorm1d(output_channels)
+#         self.relu_parallel = nn.ReLU()
+
+#         # 6. Final Temporal Reduction (from T=25 to 5)
+#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+#                                               kernel_size=5, stride=5, padding=2)
+#         self.bn_final = nn.BatchNorm1d(output_channels)
+#         self.relu_final = nn.ReLU()
+
+#     def forward(self, x):
+#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+#         # PCA projection
+#         x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+
+#         x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+
+#         # 1. Low-pass filter
+#         x = self.low_pass_conv(x)  # (B, 128, 200)
+#         x = self.bn_initial(x)
+#         x = self.relu_initial(x)
+
+#         x = self.ds_conv1(x)  # T: 200 -> 100
+#         x = self.bn_ds1(x)
+#         x = self.relu_ds1(x)
+
+#         # 2. Hierarchical Dilated Convolutions
+#         x = self.hierarchical_dilated_1(x)
+#         x = self.hierarchical_dilated_2(x)
+#         # x = self.hierarchical_dilated_3(x)  # Channels: c_initial -> c_hierarchical_out =64
+
+#         # 3. Second Temporal Reduction
+#         x = self.ds_conv2(x)  # T: 100 -> 50
+#         x = self.bn_ds2(x)
+#         x = self.relu_ds2(x)
+
+#         # 4. Channel Adjustment
+#         x = self.channel_adjust_before_parallel(x)  # Channels: c_hierarchical_out -> output_channels
+#         x = self.bn_adjust(x)
+#         x = self.relu_adjust(x)
+
+#         # 5. Parallel Dilated Convolutions
+#         x = self.parallel_dilated_blocks(x)
+#         x = self.bn_parallel(x)
+#         x = self.relu_parallel(x)
+
+#         # 6. Final Temporal Reduction
+#         x = self.final_reduction_conv(x)  # T: 50 -> embedding_time_dim (approx)
+#         x = self.bn_final(x)
+#         x = self.relu_final(x)
+
+#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
-class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
-        super(CNNFeatureExtractor, self).__init__()
-        self.embedding_time_dim = embedding_time_dim
-
-        c_initial = 128  # Channels after initial convolution
-        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
-
-        # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
-        self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
-        self.bn_initial = nn.BatchNorm1d(c_initial)
-        self.relu_initial = nn.ReLU()
-        
-        self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
-        self.bn_ds1 = nn.BatchNorm1d(c_initial)
-        self.relu_ds1 = nn.ReLU()
-
-        # 2. Hierarchical Dilated Convolutions (on T=100)
-        # Input: (B, c_initial, 100)
-        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
-        # Reduce channels in the last hierarchical block
-        # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
-        # Output: (B, c_hierarchical_out, 100)
-
-        # 3. Second Temporal Reduction (T: 100 -> 50)
-        # Input: (B, c_hierarchical_out, 100)
-        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
-        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-        self.relu_ds2 = nn.ReLU()
-        # Output: (B, c_hierarchical_out, 50)
-
-        # 4. Channel Adjustment to output_channels (T: 50)
-        # Input: (B, c_hierarchical_out, 50)
-        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-        self.bn_adjust = nn.BatchNorm1d(output_channels)
-        self.relu_adjust = nn.ReLU()
-        # Output: (B, output_channels, 50)
-
-        # 5. Parallel Dilated Convolutions (on T=50)
-        # Input: (B, output_channels, 50)
-        self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
-        self.bn_parallel = nn.BatchNorm1d(output_channels)
-        self.relu_parallel = nn.ReLU()
-        # Output: (B, output_channels, 50)
-
-        # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
-        # Input: (B, output_channels, 50)
-        
-        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-                                              kernel_size=5, stride=5, padding=2)
-        self.bn_final = nn.BatchNorm1d(output_channels)
-        self.relu_final = nn.ReLU()
-        # Output: (B, output_channels, embedding_time_dim)
-
-    def forward(self, x):
-        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
-        x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
-
-        # 1. Initial Processing & First Temporal Reduction
-        x = self.initial_conv(x) #d from 270 ->128
-        x = self.bn_initial(x)
-        x = self.relu_initial(x)
-        
-        x = self.ds_conv1(x) # T: 200 -> 100
-        x = self.bn_ds1(x)
-        x = self.relu_ds1(x)
-
-        # 2. Hierarchical Dilated Convolutions
-        x = self.hierarchical_dilated_1(x)
-        x = self.hierarchical_dilated_2(x)
-        # x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
-
-        # 3. Second Temporal Reduction
-        x = self.ds_conv2(x) # T: 100 -> 50
-        x = self.bn_ds2(x)
-        x = self.relu_ds2(x)
-
-        # 4. Channel Adjustment
-        x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
-        x = self.bn_adjust(x)
-        x = self.relu_adjust(x)
-        
-        # 5. Parallel Dilated Convolutions
-        x = self.parallel_dilated_blocks(x)
-        x = self.bn_parallel(x)
-        x = self.relu_parallel(x)
-
-        # 6. Final Temporal Reduction
-        x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
-        x = self.bn_final(x)
-        x = self.relu_final(x)
-        
-        # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
-        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
+# class CNNFeatureExtractor(nn.Module):
+#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
+#         super(CNNFeatureExtractor, self).__init__()
+#         self.embedding_time_dim = embedding_time_dim
+#
+#         c_initial = 128  # Channels after initial convolution
+#         c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
+#
+#         # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
+#         self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
+#         self.bn_initial = nn.BatchNorm1d(c_initial)
+#         self.relu_initial = nn.ReLU()
+#
+#         self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
+#         self.bn_ds1 = nn.BatchNorm1d(c_initial)
+#         self.relu_ds1 = nn.ReLU()
+#
+#         # 2. Hierarchical Dilated Convolutions (on T=100)
+#         # Input: (B, c_initial, 100)
+#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
+#         # Reduce channels in the last hierarchical block
+#         # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+#         # Output: (B, c_hierarchical_out, 100)
+#
+#         # 3. Second Temporal Reduction (T: 100 -> 50)
+#         # Input: (B, c_hierarchical_out, 100)
+#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
+#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+#         self.relu_ds2 = nn.ReLU()
+#         # Output: (B, c_hierarchical_out, 50)
+#
+#         # 4. Channel Adjustment to output_channels (T: 50)
+#         # Input: (B, c_hierarchical_out, 50)
+#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+#         self.bn_adjust = nn.BatchNorm1d(output_channels)
+#         self.relu_adjust = nn.ReLU()
+#         # Output: (B, output_channels, 50)
+#
+#         # 5. Parallel Dilated Convolutions (on T=50)
+#         # Input: (B, output_channels, 50)
+#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
+#         self.bn_parallel = nn.BatchNorm1d(output_channels)
+#         self.relu_parallel = nn.ReLU()
+#         # Output: (B, output_channels, 50)
+#
+#         # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
+#         # Input: (B, output_channels, 50)
+#
+#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+#                                               kernel_size=5, stride=5, padding=2)
+#         self.bn_final = nn.BatchNorm1d(output_channels)
+#         self.relu_final = nn.ReLU()
+#         # Output: (B, output_channels, embedding_time_dim)
+#
+#     def forward(self, x):
+#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+#         x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
+#
+#         # 1. Initial Processing & First Temporal Reduction
+#         x = self.initial_conv(x) #d from 270 ->128
+#         x = self.bn_initial(x)
+#         x = self.relu_initial(x)
+#
+#         x = self.ds_conv1(x) # T: 200 -> 100
+#         x = self.bn_ds1(x)
+#         x = self.relu_ds1(x)
+#
+#         # 2. Hierarchical Dilated Convolutions
+#         x = self.hierarchical_dilated_1(x)
+#         x = self.hierarchical_dilated_2(x)
+#         # x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
+#
+#         # 3. Second Temporal Reduction
+#         x = self.ds_conv2(x) # T: 100 -> 50
+#         x = self.bn_ds2(x)
+#         x = self.relu_ds2(x)
+#
+#         # 4. Channel Adjustment
+#         x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
+#         x = self.bn_adjust(x)
+#         x = self.relu_adjust(x)
+#
+#         # 5. Parallel Dilated Convolutions
+#         x = self.parallel_dilated_blocks(x)
+#         x = self.bn_parallel(x)
+#         x = self.relu_parallel(x)
+#
+#         # 6. Final Temporal Reduction
+#         x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
+#         x = self.bn_final(x)
+#         x = self.relu_final(x)
+#
+#         # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
+#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 class Predictor(nn.Module):
     def __init__(self):
         super().__init__()
