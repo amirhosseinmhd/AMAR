@@ -23,6 +23,7 @@ from .joint_location_detr import run_joint_detr
 from .crowd_counting_THAT import run_crowd_counting_THAT
 from .multi_senseX import run_multi_senseX
 from .multi_user import run_multi_user
+from .JEPA_Supervised import run_JEPA_hyb
 
 #
 ##
@@ -44,4 +45,5 @@ __all__ = ["run_strf",
             "run_joint_detr",
            "run_crowd_counting_THAT",
            "run_multi_senseX",
-           "run_multi_user"]
+           "run_multi_user",
+           "run_JEPA_hyb"]
