@@ -175,10 +175,9 @@ class JEPA_Sup(nn.Module):
 
         return torch.stack(segments_to_extract, dim=0)
 
-    def _get_tokens_for_context(self, x_full_view_batch,
-                                list_of_context_segment_indices,
-                                sampled_context_token_indices_tensor,
-                                sampled_context_padding_mask_tensor,
+    def _get_tokens_for_context(self,
+                                x_full_view_batch,
+                                context_mask,
                                 cnn_extractor,
                                 transformer_encoder):
         # x_full_view_batch: (batch_size, total_view_len, input_channels)
@@ -193,77 +192,25 @@ class JEPA_Sup(nn.Module):
         #   padded_context_original_indices: (batch_size, max_context_tokens_in_batch) - this is sampled_context_token_indices_tensor
 
         batch_size = x_full_view_batch.shape[0]
-        all_extracted_cnn_tokens_batch = []  # List of tensors, one per batch item (variable token lengths)
 
-        # This is now the definitive max length for context tokens in this batch
-        max_context_tokens_in_batch = sampled_context_token_indices_tensor.shape[1]
+        max_total_tokens = preset["jepa"]["num_segments_total_view"]
+        window_length = preset["jepa"]["segment_length"]
+        x_full_view_reshaped = x_full_view_batch.reshape(batch_size*max_total_tokens, window_length ,270)
+        token_cnn_output = cnn_extractor(x_full_view_reshaped) # batch_size*max_total_tokens, 1, 270
+        token_encoder_unmasked = token_cnn_output.reshape(batch_size, max_total_tokens, -1)
+        original_indices = torch.arange(
+            max_total_tokens,
+            device=x_full_view_batch.device
+        )
+        token_original_indices = original_indices.unsqueeze(0).expand(batch_size, -1)
 
-        for i in range(batch_size):
-            x_item_full_view = x_full_view_batch[i]
-            item_context_segment_indices = list_of_context_segment_indices[i]  # Segment indices for extraction
+        context_embeddings = transformer_encoder(
+            src=token_encoder_unmasked,
+            token_original_indices=token_original_indices,
+            src_key_padding_mask=context_mask.bool()
+        )
 
-            num_actual_tokens_for_item_i = (~sampled_context_padding_mask_tensor[i]).sum().item()
-
-            if not item_context_segment_indices:  # If no segments, then no tokens
-                if num_actual_tokens_for_item_i != 0:
-                    raise ValueError(f"Item {i} has no context segments but sampler mask indicates "
-                                     f"{num_actual_tokens_for_item_i} tokens.")
-                all_extracted_cnn_tokens_batch.append(
-                    torch.empty(0, preset["nn"]["d_embedding"], device=x_item_full_view.device))
-                continue
-
-            segments_for_cnn_item = self._extract_segments_from_x(x_item_full_view, item_context_segment_indices)
-
-            if segments_for_cnn_item.numel() == 0:
-                if num_actual_tokens_for_item_i != 0:
-                    raise ValueError(f"Item {i} has empty extracted segments but sampler mask indicates "
-                                     f"{num_actual_tokens_for_item_i} tokens.")
-                all_extracted_cnn_tokens_batch.append(
-                    torch.empty(0, preset["nn"]["d_embedding"], device=x_item_full_view.device))
-                continue
-
-            cnn_tokens_item = cnn_extractor(segments_for_cnn_item)  # (num_segs, tokens_per_seg, channels)
-            num_item_context_tokens_from_cnn = cnn_tokens_item.shape[0] * cnn_tokens_item.shape[1]
-
-            # Check consistency between CNN output and sampler's mask
-            if num_item_context_tokens_from_cnn != num_actual_tokens_for_item_i:
-                raise ValueError(
-                    f"Mismatch in token counts for item {i}: CNN produced {num_item_context_tokens_from_cnn} tokens, "
-                    f"but sampler's mask indicates {num_actual_tokens_for_item_i} actual tokens. "
-                    f"Context segments: {item_context_segment_indices}"
-                )
-
-            all_extracted_cnn_tokens_batch.append(
-                cnn_tokens_item.reshape(num_item_context_tokens_from_cnn, preset["nn"]["d_embedding"]))
-
-        # Pad the extracted CNN tokens to max_context_tokens_in_batch
-        # This tensor holds the actual token embeddings.
-        padded_context_tokens = torch.zeros(batch_size, max_context_tokens_in_batch, preset["nn"]["d_embedding"],
-                                            device=x_full_view_batch.device, dtype=all_extracted_cnn_tokens_batch[
-                0].dtype if all_extracted_cnn_tokens_batch and all_extracted_cnn_tokens_batch[
-                0].numel() > 0 else torch.float)
-
-        for i in range(batch_size):
-            tokens_item = all_extracted_cnn_tokens_batch[i]  # This is a tensor of shape (num_actual_tokens_for_item_i, cnn_output_channels)
-            seq_len = tokens_item.shape[0]  # This is num_actual_tokens_for_item_i
-            if seq_len > 0:
-                # We place the actual tokens at the beginning, matching how the mask and indices are structured
-                padded_context_tokens[i, :seq_len, :] = tokens_item
-
-        # The original indices and the padding mask are now directly from the sampler
-        padded_context_original_indices = sampled_context_token_indices_tensor
-        context_padding_mask = sampled_context_padding_mask_tensor
-
-        if max_context_tokens_in_batch == 0:
-            # Return tensors with correct batch_size but 0 sequence length if no context tokens in batch
-            return (padded_context_tokens,  # (B, 0, D)
-                    context_padding_mask,  # (B, 0)
-                    padded_context_original_indices)  # (B, 0)
-
-        context_tokens_encoded = transformer_encoder(padded_context_tokens,
-                                                     token_original_indices=padded_context_original_indices,
-                                                     src_key_padding_mask=context_padding_mask)
-        return context_tokens_encoded
+        return context_embeddings
 
     def _process_full_view_for_target_encoder(self, x_full_view_batch, cnn_extractor, transformer_encoder):
         # x_full_view_batch: Batch of full processing windows.
@@ -475,27 +422,22 @@ class JEPA_Sup(nn.Module):
             sampling_info["target_block_token_indices_tensor"],  # Use tensor of token indices
             z_target_ema_all_tokens
         )
-        context_original_indices, context_padding_mask = sampling_info["context_token_indices_tensor"], sampling_info[
-            "context_padding_mask_tensor"]
+        # context_original_indices, context_padding_mask = sampling_info["context_token_indices_tensor"], sampling_info[
+        #     "context_padding_mask_tensor"]
 
         # --- Step 3: Process Context Segments with Online Encoder (Online Path) ---
         z_context_online = self._get_tokens_for_context(
             x_full_view_of_segments,
-            sampling_info["context_segment_indices_for_online_encoder"],  # Original segment indices for data extraction
-            context_original_indices,
-            context_padding_mask,
+            sampling_info["context_mask"],  # Original segment indices for data extraction
             self.online_cnn_feature_extractor,
             self.online_transformer_encoder
         )
         # z_context_online shape: (batch_size, max_context_tokens_in_batch, preset["nn"]["d_embedding"])
-        # context_padding_mask shape: (batch_size, max_context_tokens_in_batch)
-        # context_original_indices shape: (batch_size, max_context_tokens_in_batch)
 
         # --- Step 4: Pass Context Tokens through Decoder ---
         outputs_class = self.decoder(
             z_context_online,
-            token_original_indices=context_original_indices,
-            src_key_padding_mask=context_padding_mask
+            src_key_padding_mask=sampling_info["context_mask"]
         )
 
         return {
@@ -946,10 +888,10 @@ def train_hybrid_jepa(model: Module,
             # Accumulate loss statistics
             epoch_total_loss += loss_dict['total_loss'].item()
             epoch_supervised_loss += loss_dict['supervised_loss'].item()
-            epoch_ssl_loss += loss_dict['ssl_loss'].item()
-            epoch_jepa_sim_loss += loss_dict['jepa_sim_loss'].item()
-            epoch_jepa_std_loss += loss_dict['jepa_std_loss'].item()
-            epoch_jepa_cov_loss += loss_dict['jepa_cov_loss'].item()
+            epoch_ssl_loss += 0#loss_dict['ssl_loss'].item()
+            epoch_jepa_sim_loss += 0#loss_dict['jepa_sim_loss'].item()
+            epoch_jepa_std_loss += 0#loss_dict['jepa_std_loss'].item()
+            epoch_jepa_cov_loss += 0#loss_dict['jepa_cov_loss'].item()
             num_batches += 1
 
         # ===== TRAINING METRICS CALCULATION =====
@@ -1026,10 +968,10 @@ def train_hybrid_jepa(model: Module,
                     # Loss components - Validation
                     f"{layer_idx}/total_loss_test": test_loss_dict['total_loss'].item(),
                     f"{layer_idx}/supervised_loss_test": test_loss_dict['supervised_loss'].item(),
-                    f"{layer_idx}/ssl_loss_test": test_loss_dict['ssl_loss'].item(),
-                    f"{layer_idx}/jepa_sim_loss_test": test_loss_dict['jepa_sim_loss'].item(),
-                    f"{layer_idx}/jepa_std_loss_test": test_loss_dict['jepa_std_loss'].item(),
-                    f"{layer_idx}/jepa_cov_loss_test": test_loss_dict['jepa_cov_loss'].item(),
+                    # f"{layer_idx}/ssl_loss_test": test_loss_dict['ssl_loss'].item(),
+                    # f"{layer_idx}/jepa_sim_loss_test": test_loss_dict['jepa_sim_loss'].item(),
+                    # f"{layer_idx}/jepa_std_loss_test": test_loss_dict['jepa_std_loss'].item(),
+                    # f"{layer_idx}/jepa_cov_loss_test": test_loss_dict['jepa_cov_loss'].item(),
                     # Performance metrics - Training
                     f"{layer_idx}/total_error_train": layer_train_metrics['total_error'],
                     f"{layer_idx}/perfect_prediction_percentage_train": layer_train_metrics[
@@ -1055,15 +997,15 @@ def train_hybrid_jepa(model: Module,
                         f"    Total Loss       | Train: {avg_total_loss:.6f} | Test: {test_loss_dict['total_loss'].cpu():.6f}")
                     print(
                         f"    Supervised Loss  | Train: {avg_supervised_loss:.6f} | Test: {test_loss_dict['supervised_loss'].cpu():.6f}")
-                    print(
-                        f"    SSL Loss         | Train: {avg_ssl_loss:.6f} | Test: {test_loss_dict['ssl_loss'].cpu():.6f}")
-                    print(
-                        f"    JEPA Sim Loss    | Train: {avg_jepa_sim_loss:.6f} | Test: {test_loss_dict['jepa_sim_loss'].cpu():.6f}")
-                    print(
-                        f"    JEPA Std Loss    | Train: {avg_jepa_std_loss:.6f} | Test: {test_loss_dict['jepa_std_loss'].cpu():.6f}")
-                    print(
-                        f"    JEPA Cov Loss    | Train: {avg_jepa_cov_loss:.6f} | Test: {test_loss_dict['jepa_cov_loss'].cpu():.6f}")
-                    print(f"  📈 PERFORMANCE:")
+                    # print(
+                    #     f"    SSL Loss         | Train: {avg_ssl_loss:.6f} | Test: {test_loss_dict['ssl_loss'].cpu():.6f}")
+                    # print(
+                    #     f"    JEPA Sim Loss    | Train: {avg_jepa_sim_loss:.6f} | Test: {test_loss_dict['jepa_sim_loss'].cpu():.6f}")
+                    # print(
+                    #     f"    JEPA Std Loss    | Train: {avg_jepa_std_loss:.6f} | Test: {test_loss_dict['jepa_std_loss'].cpu():.6f}")
+                    # print(
+                    #     f"    JEPA Cov Loss    | Train: {avg_jepa_cov_loss:.6f} | Test: {test_loss_dict['jepa_cov_loss'].cpu():.6f}")
+                    # print(f"  📈 PERFORMANCE:")
                     print(
                         f"    Total Error      | Train: {layer_train_metrics['total_error']:.6f} | Test: {layer_metrics['total_error']:.6f}")
                     print(
