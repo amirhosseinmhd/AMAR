@@ -75,7 +75,9 @@ class JEPA_Sup(nn.Module):
 
         self.sampling_call_count = 0
         self.last_weight_reset = 0
-        self.predictor = Predictor()
+        self.predictor = Predictor(preset)
+        self.predictor.set_shared_pos_encoder(self.online_transformer_encoder.pos_encoder)
+
         self.decoder = TransformerDecoder(
             d_model=features_dim,
             nhead=n_attention_heads,
@@ -844,7 +846,7 @@ def train_hybrid_jepa(model: Module,
         epoch_total_loss = 0
         epoch_supervised_loss = 0
         epoch_ssl_loss = 0
-        epoch_jepa_sim_loss = 0
+        epoch_jepa_predictive_loss = 0
         epoch_jepa_std_loss = 0
         epoch_jepa_cov_loss = 0
         num_batches = 0
@@ -859,17 +861,24 @@ def train_hybrid_jepa(model: Module,
             if model.training:
                 data_batch_x = apply_augmentation(data_batch_x)
 
-            # Handle different training modes
-            if var_mode == "count_classification":
-                data_batch_y = data_batch_y.sum(axis=1)
-            elif var_mode == "baseline":
-                data_batch_y = data_batch_y.reshape(data_batch_y.shape[0], -1)
 
             # Forward pass through hybrid model
             model_outputs = model(data_batch_x)
+            model_outputs["ssl_predictions"] = model.predictor(
+               model_outputs["z_context_online"],
+               model_outputs["sampling_info"]["context_mask"],
+               model_outputs["sampling_info"]["target_block_token_indices_tensor"])
+            # we expect
+            # z_context_inline be m by T by d
+            # context mask be m by T by d which shows which context embedding which shows which patches are invisible to us,
+            # target_block_token_indicies, shows which indicies we should predict for each block.
+            # we expect it be m by target_block_size by num_indices_per_target_blcok
+
+
+            # The ssl_outputs now are batch_size, num_target_blocks, num_target_tokens, d_target_tokens
 
             # Calculate combined loss (supervised + SSL)
-            loss_dict = loss(model_outputs, data_batch_y, model)
+            loss_dict = loss(model_outputs, data_batch_y)
             total_loss = loss_dict['total_loss']
 
             # Backward pass and optimization
@@ -888,10 +897,10 @@ def train_hybrid_jepa(model: Module,
             # Accumulate loss statistics
             epoch_total_loss += loss_dict['total_loss'].item()
             epoch_supervised_loss += loss_dict['supervised_loss'].item()
-            epoch_ssl_loss += 0#loss_dict['ssl_loss'].item()
-            epoch_jepa_sim_loss += 0#loss_dict['jepa_sim_loss'].item()
-            epoch_jepa_std_loss += 0#loss_dict['jepa_std_loss'].item()
-            epoch_jepa_cov_loss += 0#loss_dict['jepa_cov_loss'].item()
+            epoch_ssl_loss += loss_dict['ssl_loss'].item()
+            epoch_jepa_predictive_loss += loss_dict['jepa_predictive_loss'].item()
+            epoch_jepa_std_loss += loss_dict['jepa_std_loss'].item()
+            epoch_jepa_cov_loss += loss_dict['jepa_cov_loss'].item()
             num_batches += 1
 
         # ===== TRAINING METRICS CALCULATION =====
@@ -924,7 +933,11 @@ def train_hybrid_jepa(model: Module,
             test_model_outputs = model(data_test_x)
 
             # Calculate validation losses
-            test_loss_dict = loss(test_model_outputs, data_test_y, model)
+            test_model_outputs["ssl_predictions"] = model.predictor(
+               test_model_outputs["z_context_online"],
+               test_model_outputs["sampling_info"]["context_mask"],
+               test_model_outputs["sampling_info"]["target_block_token_indices_tensor"])
+            test_loss_dict = loss(test_model_outputs, data_test_y)
 
             # Extract predictions and calculate metrics
             predict_test_y = test_model_outputs["outputs_class"]
@@ -942,7 +955,7 @@ def train_hybrid_jepa(model: Module,
         avg_total_loss = epoch_total_loss / num_batches
         avg_supervised_loss = epoch_supervised_loss / num_batches
         avg_ssl_loss = epoch_ssl_loss / num_batches
-        avg_jepa_sim_loss = epoch_jepa_sim_loss / num_batches
+        avg_jepa_predictive_loss = epoch_jepa_predictive_loss / num_batches
         avg_jepa_std_loss = epoch_jepa_std_loss / num_batches
         avg_jepa_cov_loss = epoch_jepa_cov_loss / num_batches
 
@@ -962,16 +975,16 @@ def train_hybrid_jepa(model: Module,
                     f"{layer_idx}/total_loss_train": avg_total_loss,
                     f"{layer_idx}/supervised_loss_train": avg_supervised_loss,
                     f"{layer_idx}/ssl_loss_train": avg_ssl_loss,
-                    f"{layer_idx}/jepa_sim_loss_train": avg_jepa_sim_loss,
+                    f"{layer_idx}/jepa_predictive_loss_train": avg_jepa_predictive_loss,
                     f"{layer_idx}/jepa_std_loss_train": avg_jepa_std_loss,
                     f"{layer_idx}/jepa_cov_loss_train": avg_jepa_cov_loss,
                     # Loss components - Validation
                     f"{layer_idx}/total_loss_test": test_loss_dict['total_loss'].item(),
                     f"{layer_idx}/supervised_loss_test": test_loss_dict['supervised_loss'].item(),
-                    # f"{layer_idx}/ssl_loss_test": test_loss_dict['ssl_loss'].item(),
-                    # f"{layer_idx}/jepa_sim_loss_test": test_loss_dict['jepa_sim_loss'].item(),
-                    # f"{layer_idx}/jepa_std_loss_test": test_loss_dict['jepa_std_loss'].item(),
-                    # f"{layer_idx}/jepa_cov_loss_test": test_loss_dict['jepa_cov_loss'].item(),
+                    f"{layer_idx}/ssl_loss_test": test_loss_dict['ssl_loss'].item(),
+                    f"{layer_idx}/jepa_predictive_loss_test": test_loss_dict['jepa_predictive_loss'].item(),
+                    f"{layer_idx}/jepa_std_loss_test": test_loss_dict['jepa_std_loss'].item(),
+                    f"{layer_idx}/jepa_cov_loss_test": test_loss_dict['jepa_cov_loss'].item(),
                     # Performance metrics - Training
                     f"{layer_idx}/total_error_train": layer_train_metrics['total_error'],
                     f"{layer_idx}/perfect_prediction_percentage_train": layer_train_metrics[
@@ -997,15 +1010,15 @@ def train_hybrid_jepa(model: Module,
                         f"    Total Loss       | Train: {avg_total_loss:.6f} | Test: {test_loss_dict['total_loss'].cpu():.6f}")
                     print(
                         f"    Supervised Loss  | Train: {avg_supervised_loss:.6f} | Test: {test_loss_dict['supervised_loss'].cpu():.6f}")
-                    # print(
-                    #     f"    SSL Loss         | Train: {avg_ssl_loss:.6f} | Test: {test_loss_dict['ssl_loss'].cpu():.6f}")
-                    # print(
-                    #     f"    JEPA Sim Loss    | Train: {avg_jepa_sim_loss:.6f} | Test: {test_loss_dict['jepa_sim_loss'].cpu():.6f}")
-                    # print(
-                    #     f"    JEPA Std Loss    | Train: {avg_jepa_std_loss:.6f} | Test: {test_loss_dict['jepa_std_loss'].cpu():.6f}")
-                    # print(
-                    #     f"    JEPA Cov Loss    | Train: {avg_jepa_cov_loss:.6f} | Test: {test_loss_dict['jepa_cov_loss'].cpu():.6f}")
-                    # print(f"  📈 PERFORMANCE:")
+                    print(
+                        f"    SSL Loss         | Train: {avg_ssl_loss:.6f} | Test: {test_loss_dict['ssl_loss'].cpu():.6f}")
+                    print(
+                        f"    JEPA Sim Loss    | Train: {avg_jepa_predictive_loss:.6f} | Test: {test_loss_dict['jepa_predictive_loss'].cpu():.6f}")
+                    print(
+                        f"    JEPA Std Loss    | Train: {avg_jepa_std_loss:.6f} | Test: {test_loss_dict['jepa_std_loss'].cpu():.6f}")
+                    print(
+                        f"    JEPA Cov Loss    | Train: {avg_jepa_cov_loss:.6f} | Test: {test_loss_dict['jepa_cov_loss'].cpu():.6f}")
+                    print(f"  📈 PERFORMANCE:")
                     print(
                         f"    Total Error      | Train: {layer_train_metrics['total_error']:.6f} | Test: {layer_metrics['total_error']:.6f}")
                     print(
@@ -1024,14 +1037,14 @@ def train_hybrid_jepa(model: Module,
                 "total_loss_train": avg_total_loss,
                 "supervised_loss_train": avg_supervised_loss,
                 "ssl_loss_train": avg_ssl_loss,
-                "jepa_sim_loss_train": avg_jepa_sim_loss,
+                "jepa_predictive_loss_train": avg_jepa_predictive_loss,
                 "jepa_std_loss_train": avg_jepa_std_loss,
                 "jepa_cov_loss_train": avg_jepa_cov_loss,
                 # Loss components - Validation
                 "total_loss_test": test_loss_dict['total_loss'].item(),
                 "supervised_loss_test": test_loss_dict['supervised_loss'].item(),
                 "ssl_loss_test": test_loss_dict['ssl_loss'].item(),
-                "jepa_sim_loss_test": test_loss_dict['jepa_sim_loss'].item(),
+                "jepa_predictive_loss_test": test_loss_dict['jepa_predictive_loss'].item(),
                 "jepa_std_loss_test": test_loss_dict['jepa_std_loss'].item(),
                 "jepa_cov_loss_test": test_loss_dict['jepa_cov_loss'].item(),
                 # Performance metrics
@@ -1059,7 +1072,7 @@ def train_hybrid_jepa(model: Module,
                 print(
                     f"    SSL Loss         | Train: {avg_ssl_loss:.6f} | Test: {test_loss_dict['ssl_loss'].cpu():.6f}")
                 print(
-                    f"    JEPA Sim Loss    | Train: {avg_jepa_sim_loss:.6f} | Test: {test_loss_dict['jepa_sim_loss'].cpu():.6f}")
+                    f"    JEPA Sim Loss    | Train: {avg_jepa_predictive_loss:.6f} | Test: {test_loss_dict['jepa_predictive_loss'].cpu():.6f}")
                 print(
                     f"    JEPA Std Loss    | Train: {avg_jepa_std_loss:.6f} | Test: {test_loss_dict['jepa_std_loss'].cpu():.6f}")
                 print(

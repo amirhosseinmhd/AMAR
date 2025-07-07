@@ -13,7 +13,7 @@ preset = {
     "wandb_name": "test",
     "model": "multi_user",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
-                                                            #JOINT_DETR
+                                                            #JOINT_DETR, JEPA_HYB
     # "model": "MLP",
     ## define task
     "task": "activity",                                 # "identity", "activity", "location"
@@ -59,6 +59,7 @@ preset = {
         },
         # Loss function parameters
         "loss": {
+            "SSL_coeff": 0.5 ,
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
@@ -92,7 +93,15 @@ preset = {
         "sampling_weight_decay_factor": 0.9,  # Factor to reduce weights after sampling
         "sampling_weight_reset_interval": 1000,  # Reset weights every N times
         "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
-        }, 
+        "loss":{
+            "prediction_coef": 1,
+            "vicreg_coeff": 0.001,
+            "vicreg_std_coeff": 25.0,
+            "vicreg_cov_coeff": 1.0
+            }
+
+        },
+
     ## encoding of activities and locations
     "encoding": {
         "activity": {                                   # encoding of different activities

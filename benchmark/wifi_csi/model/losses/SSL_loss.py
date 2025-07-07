@@ -2,7 +2,6 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-
 class VICRegLoss(nn.Module):
     """
     VICReg Loss implementation for C-JEPA following the exact pseudocode:
@@ -60,7 +59,7 @@ class VICRegLoss(nn.Module):
         
         return cov_loss
     
-    def forward(self, predictions, actual_targets, z_context_pooled):
+    def forward(self, z_context_pooled):
         """
         Compute VICReg regularization terms (variance and covariance only):
         - std_loss: applied to context embeddings  
@@ -69,8 +68,6 @@ class VICRegLoss(nn.Module):
         Note: Invariance/similarity loss is handled separately as the main prediction loss
         
         Args:
-            predictions: Not used (kept for interface compatibility)
-            actual_targets: Not used (kept for interface compatibility) 
             z_context_pooled: Pooled context representations, shape (batch_size, feature_dim)
         
         Returns:
@@ -165,21 +162,16 @@ class CombinedJEPALoss(nn.Module):
             dict: Dictionary with total loss and individual components
         """
         # 1. Invariance loss: between predicted tokens and actual target tokens (this IS the prediction loss)
-        invariance_loss = F.mse_loss(predictions, actual_targets)
+        batch_size, num_blocks, num_target_tokens, dim_context = predictions.shape
+        invariance_loss = F.mse_loss(predictions.view(-1, num_target_tokens, dim_context), actual_targets)
         
         # 2. Pool context representations for variance/covariance losses
         z_context_pooled = self.pool_representations(z_context_online, context_padding_mask)
         
         # 3. Apply VICReg variance and covariance losses to context embeddings
-        vicreg_losses = self.vicreg_loss(predictions, actual_targets, z_context_pooled)
+        vicreg_losses = self.vicreg_loss(z_context_pooled)
         
         # 4. Combined loss: invariance (prediction) + VICReg regularization terms
         total_loss = self.prediction_coeff * invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
         
-        return {
-            'total_loss': total_loss,
-            'vicreg_total_loss': vicreg_losses['total_loss'],
-            'vicreg_sim_loss': invariance_loss,  # Same as prediction loss
-            'vicreg_std_loss': vicreg_losses['std_loss'],
-            'vicreg_cov_loss': vicreg_losses['cov_loss']
-        }
+        return total_loss, invariance_loss,  vicreg_losses['std_loss'], vicreg_losses['cov_loss']

@@ -17,10 +17,10 @@ from sklearn.metrics import classification_report, accuracy_score
 from scipy.optimize import linear_sum_assignment
 import sys
 modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
-
+from sklearn.decomposition import PCA
 if modules_path not in sys.path:
     sys.path.insert(0, modules_path) # Insert at the beginning to prioritize it
-
+from model.modules.molecules import PCAFeatureExtractor
 from train import train
 from preset import preset
 import torch.nn.functional as F
@@ -662,12 +662,16 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
 class DETR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0
+                 , pca_embeddings=None,):
         super().__init__()
-        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"],
+                                                     embedding_time_dim=preset["cnn_embedding_time_dim"],
+                                                                pca_components=pca_embeddings)
         var_embedding_shape = (embedding_time_dim, features_dim)
         self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
-                                           num_transformer_encoder_layers=4)
+                                           num_transformer_encoder_layers=8)
         self.decoder = TransformerDecoder(
             d_model=features_dim,
             nhead=n_attention_heads,
@@ -685,9 +689,9 @@ class DETR_MultiUser(nn.Module):
 
         # Optimized version:
         batch_size = x.shape[0]
-        num_segments = 29
+        num_segments = preset["nn"]["token_length"]
 
-        segment_length = 100
+        segment_length = int(x.shape[1]/num_segments)
         input_channels = x.shape[2]
 
         # Reshape x for batch processing of all segments by the feature_extractor
@@ -705,32 +709,19 @@ class DETR_MultiUser(nn.Module):
             
         x = x[:, t_init:t_final, :]  # Extract the segments
 
-        # e.g., (batch_size, 3000, input_channels)
+
         # We reshape it to (batch_size * num_segments, segment_length, input_channels)
         # e.g., (batch_size * 15, 200, input_channels)
         # x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
-        x_batched = x
-        # Apply feature extractor once on the batched segments
+        x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
+
         extracted_features = self.feature_extractor(x_batched)
 
-        # If the feature extractor is frozen (e.g., its parameters do not require gradients),
-        # detach its output. This prevents unnecessary gradient computations for the frozen part
-        # and can save memory. We check a representative parameter's requires_grad status.
-        if not self.feature_extractor.initial_conv.weight.requires_grad:
-            extracted_features = extracted_features.detach()
-        
-        # extracted_features will have shape:
-        # (batch_size * num_segments, T_out_segment, features_dim)
-        # where T_out_segment is the time dimension output by feature_extractor for one segment,
-        # and features_dim is the output feature dimension.
 
-        # Reshape back to the desired concatenated form:
-        # (batch_size, num_segments * T_out_segment, features_dim)
         T_out_segment = extracted_features.shape[1]
         output_features_dim = extracted_features.shape[2]
-        # var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
-        # var_embedding = self.feature_extractor(x)
-        var_embedding = extracted_features
+        var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
+
 
         memory = self.encoder(var_embedding)
 
@@ -932,6 +923,11 @@ def run_that_detr(data_train_x,
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
+    data_x_mean = np.mean(data_train_x, axis=1)
+    pca = PCA(n_components=50)
+    pca.fit(data_x_mean)
+    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
+
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
@@ -961,8 +957,8 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),
-                                                     var_x_shape, as_strings=False)
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    pca_embeddings=pca_components.to(torch.device("cpu"))),var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -996,7 +992,8 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]).to(device) 
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    pca_embeddings=pca_components).to(device)
         # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters

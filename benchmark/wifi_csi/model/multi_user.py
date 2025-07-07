@@ -28,13 +28,13 @@ from utils import *
 import wandb
 from collections import Counter
 import itertools # Ensure itertools is imported
-from model.JEPA import JEPA_Model, CNNFeatureExtractor as JEPA_CNNFeatureExtractor, Transformer_Encoder as JEPA_Transformer_Encoder # Import JEPA components
+from model.JEPA import JEPA_Model, PCAFeatureExtractor as JEPA_CNNFeatureExtractor, Transformer_Encoder as JEPA_Transformer_Encoder # Import JEPA components
 
-JEPA_CONFIG = preset["jepa"]
-JEPA_CONFIG.update(preset["nn"])  # Merge with neural network hyperparameters
-JEPA_CONFIG.update(preset["data"])  # Merge with data selection parameters
-JEPA_CONFIG["num_target_blocks"] = int(JEPA_CONFIG["num_segments_total_view"] * 0.22)
-JEPA_CONFIG["cnn_embedding_time_dim"] = int(JEPA_CONFIG["segment_length"] / 20)
+# JEPA_CONFIG = preset["jepa"]
+# JEPA_CONFIG.update(preset["nn"])  # Merge with neural network hyperparameters
+# JEPA_CONFIG.update(preset["data"])  # Merge with data selection parameters
+# JEPA_CONFIG["num_target_blocks"] = int(JEPA_CONFIG["num_segments_total_view"] * 0.22)
+# JEPA_CONFIG["cnn_embedding_time_dim"] = int(JEPA_CONFIG["segment_length"] / 20)
 
 
 

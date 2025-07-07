@@ -86,23 +86,27 @@ class SegmentBlockSampler(nn.Module):
         # Stores lists of segment indices for target blocks for each item in the batch.
         batch_target_segment_indices_for_loss_list = []
         # Stores lists of segment indices for context for each item in the batch.
-        batch_context_segment_indices_for_online_encoder_list = []
-
         # Stores lists of token indices for target blocks (before converting to tensor).
         batch_target_token_indices_list_of_lists = []
         # Stores lists of token indices for context (before converting to tensor).
         batch_context_token_indices_list_of_lists = []
 
         max_context_tokens_for_batch = 0
+        context_mask = torch.ones(batch_size, self.total_segments_in_view, device=device)
+        # for _ in range(self.num_target_blocks):
+        # start_segment = self._get_fair_start_segment() # This should return a M by num_blocks as starting_point of
+                                                        # where we mask the context
 
-        for _ in range(batch_size):
+
+
+        for sample_iter in range(batch_size):
             all_possible_segment_indices = list(range(self.total_segments_in_view))
             current_target_blocks_segments_for_item = []
             current_target_blocks_tokens_for_item_list = []  # List of lists (tokens per block)
             union_of_target_segments_for_item = set()
 
             # Sample `num_target_blocks` target blocks.
-            for _ in range(self.num_target_blocks):
+            for target_iter in range(self.num_target_blocks):
                 start_segment = self._get_fair_start_segment()
                 # Define the segments belonging to this block.
                 block_segments = list(range(start_segment, start_segment + self.target_block_size_segments))
@@ -118,37 +122,14 @@ class SegmentBlockSampler(nn.Module):
             # Context segments are those not included in any target block.
             context_segments_for_item = [s for s in all_possible_segment_indices if
                                          s not in union_of_target_segments_for_item]
+            context_mask[sample_iter,  context_segments_for_item] = 0
 
-            # Convert context segment indices to token indices
-            context_token_indices_for_item = []
-            for seg_idx in context_segments_for_item:
-                start_token = seg_idx * self.tokens_per_segment
-                context_token_indices_for_item.extend(range(start_token, start_token + self.tokens_per_segment))
 
-            if len(context_token_indices_for_item) > max_context_tokens_for_batch:
-                max_context_tokens_for_batch = len(context_token_indices_for_item)
 
             batch_target_segment_indices_for_loss_list.append(current_target_blocks_segments_for_item)
-            batch_context_segment_indices_for_online_encoder_list.append(context_segments_for_item)
             batch_target_token_indices_list_of_lists.append(current_target_blocks_tokens_for_item_list)
-            batch_context_token_indices_list_of_lists.append(context_token_indices_for_item)
 
-        # Convert context token indices to padded tensor and create mask
-        # Using 0 as padding_value, assuming 0 is a valid index but will be masked.
-        # Mask is True for padded elements.
-        context_token_indices_tensor = torch.full(
-            (batch_size, max_context_tokens_for_batch), 0, dtype=torch.long, device=device
-        )
-        context_padding_mask_tensor = torch.ones(
-            (batch_size, max_context_tokens_for_batch), dtype=torch.bool, device=device
-        )
 
-        for i, item_tokens_list in enumerate(batch_context_token_indices_list_of_lists):
-            if item_tokens_list:  # if not empty
-                num_tokens = len(item_tokens_list)
-                context_token_indices_tensor[i, :num_tokens] = torch.tensor(item_tokens_list, dtype=torch.long,
-                                                                            device=device)
-                context_padding_mask_tensor[i, :num_tokens] = False
 
         # Convert target token indices to tensor
         # Shape: (batch_size, num_target_blocks, tokens_per_target_block)
@@ -165,9 +146,14 @@ class SegmentBlockSampler(nn.Module):
 
         return {
             "target_block_segment_indices_for_loss": batch_target_segment_indices_for_loss_list,
-            "context_segment_indices_for_online_encoder": batch_context_segment_indices_for_online_encoder_list,
-            "context_token_indices_tensor": context_token_indices_tensor,
-            "context_padding_mask_tensor": context_padding_mask_tensor,
+            "context_mask": context_mask.bool(), # VERY IMPORTANT:  THIS MASK is global igg
             "target_block_token_indices_tensor": target_block_token_indices_tensor,
         }
-
+        """
+        LET ME DIG INTO IT.
+        LETS SAY WE HAVE 74 POSSIBLE TOKENS. FROM THESE TOKENS WE MIGHT SELECT 10, 12, 20, 42 TARGETS TOKENS. 
+        THE TARGET TOKENS (HERE SEGMENT) WILL BE SAVED WITHING TARGET target_block_segment_indices_for_loss,
+        
+        IMPORTANTLY SINCE WE NEED CONTEXT AS A TENSORE AND NOW OUR CONTEXT TENSOR HAS A VARIABLE LENGTH, WE WOULD 
+        
+        """
