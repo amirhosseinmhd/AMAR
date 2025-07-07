@@ -428,10 +428,13 @@ class Transformer_Encoder(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         # Learnable positional embeddings for each possible original token position.
         self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
-        self.layer_norm = nn.LayerNorm(d_model)
 
-    def forward(self, src, token_original_indices, src_key_padding_mask=None):
+    def forward(self, src, token_original_indices=None, src_key_padding_mask=None):
         # Get positional embeddings based on original indices.
+        if token_original_indices is None:
+            token_original_indices = torch.arange(
+                src.shape[1], device=src.device, dtype=torch.long
+            ).unsqueeze(0).expand(src.shape[0], -1)
         pos_embeddings = self.pos_encoder(token_original_indices)
 
         # Zero out positional embeddings for padded positions (if mask provided)
@@ -439,7 +442,6 @@ class Transformer_Encoder(nn.Module):
             pos_embeddings = pos_embeddings.masked_fill(src_key_padding_mask.unsqueeze(-1), 0)
 
         src = src + pos_embeddings
-        src = self.layer_norm(src)
 
         if src_key_padding_mask is not None:
             output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
