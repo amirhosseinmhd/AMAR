@@ -7,7 +7,7 @@ import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 from ptflops import get_model_complexity_info
-from train import train
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from preset import preset
 from utils import *
 import wandb
@@ -26,9 +26,8 @@ from model.data.datasets import JEPADataset
 from model.data.sampling import SegmentBlockSampler
 from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder, Predictor
 from model.modules.helper import save_checkpoint, load_checkpoint, get_cosine_schedule_with_warmup, generate_tsne_visualizations, compute_representation_svd_stats
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 40)
-
+# preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 40)
+#
 
 
 
@@ -412,7 +411,6 @@ class JEPA_Sup(nn.Module):
         with torch.no_grad():  # Target encoder is not trained via backpropagation.
             z_target_ema_all_tokens = self._process_full_view_for_target_encoder(
                 x_full_view_of_segments,
-
                 self.target_cnn_feature_extractor,
                 self.target_transformer_encoder
             )
@@ -526,11 +524,12 @@ def run_JEPA_hyb(data_train_x,
             dim_feedforward=preset["nn"]["dim_FFN"],
             query_dropout_rate=preset["nn"]["query_dropout_rate"],
             num_transformer_encoder_layers=preset["jepa"]["encoder_layers"],
-            pca_components=pca_components.to(torch.device("cpu"))
+            pca_components=None#pca_components.to(torch.device("cpu"))
         ),
         var_x_shape, 
         as_strings=False
     )
+
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -568,10 +567,13 @@ def run_JEPA_hyb(data_train_x,
             num_queries=preset["nn"]["num_obj_queries"],
             dim_feedforward=preset["nn"]["dim_FFN"],
             query_dropout_rate=preset["nn"]["query_dropout_rate"],
-            num_transformer_encoder_layers=preset["jepa"]["encoder_layers"],
-            pca_components=pca_components
+            num_transformer_encoder_layers=preset["jepa"]["encoder_layers"]#,
+            #pca_components=pca_components
         ).to(device)
-        
+        model_jepa_sup.online_cnn_feature_extractor = torch.compile(model_jepa_sup.online_cnn_feature_extractor, mode="default")
+        model_jepa_sup.target_cnn_feature_extractor = torch.compile(model_jepa_sup.target_cnn_feature_extractor, mode="default")
+        model_jepa_sup.decoder = torch.compile(model_jepa_sup.decoder, mode="default")
+        # model_jepa_sup.predictor = torch.compile(model_jepa_sup.predictor, mode="default")
         # Setup optimizer
         if preset.get("pretrained_path"):
             model_jepa_sup, param_groups = load_model_components(

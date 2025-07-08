@@ -52,7 +52,7 @@ class CombinedHybridLoss(nn.Module):
 
         actual_targets = actual_targets_for_loss.reshape(-1, num_target_tokens, dim_context)
 
-        total_loss,  predictive_loss, jepa_std_loss, jepa_cov_loss = self.jepa_loss_fn(
+        total_loss_jepa,  predictive_loss, jepa_std_loss, jepa_cov_loss = self.jepa_loss_fn(
             predictions=ssl_predictions,
             actual_targets=actual_targets,
             z_context_online=z_context_online,
@@ -60,12 +60,12 @@ class CombinedHybridLoss(nn.Module):
         )
 
 
-        total_loss = supervised_loss_val + self.SSL_coeff * total_loss
+        total_loss = (1-self.SSL_coeff) * supervised_loss_val + self.SSL_coeff * total_loss_jepa
 
         return {
             'total_loss': total_loss,
             'supervised_loss': supervised_loss_val,
-            'ssl_loss': supervised_loss_val,
+            'ssl_loss': total_loss_jepa,
             'jepa_predictive_loss': predictive_loss,
             'jepa_std_loss': jepa_std_loss,
             'jepa_cov_loss': jepa_cov_loss

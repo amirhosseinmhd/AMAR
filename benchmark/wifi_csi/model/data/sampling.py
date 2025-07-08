@@ -17,7 +17,7 @@ class SegmentBlockSampler(nn.Module):
         self.total_segments_in_view = preset["jepa"]["num_segments_total_view"]
         self.num_target_blocks = preset["jepa"]["num_target_blocks"]
         self.target_block_size_segments = preset["jepa"]["target_block_size_segments"]
-        self.tokens_per_segment = preset["cnn_embedding_time_dim"]
+        self.tokens_per_segment = 1#preset["cnn_embedding_time_dim"]
         self.tokens_per_target_block = self.target_block_size_segments * self.tokens_per_segment
         self.weight_decay_factor = weight_decay_factor  # Factor to reduce weights of sampled indices
 

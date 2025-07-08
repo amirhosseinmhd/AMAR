@@ -95,7 +95,7 @@ def train(model: Module,
 
             if var_mode == "count_classification":
                 data_batch_y = data_batch_y.sum(axis=1)
-            if var_mode == "baseline":
+            elif var_mode == "baseline":
                 data_batch_y = data_batch_y.reshape(data_batch_y.shape[0], -1)
 
             predict_train_y = model(data_batch_x)

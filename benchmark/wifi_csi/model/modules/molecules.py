@@ -63,20 +63,20 @@ class PCAFeatureExtractor(nn.Module):
     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
         super(PCAFeatureExtractor, self).__init__()
 
-        if pca_components is None:
-            raise ValueError("PCA components must be provided.")
         self.register_buffer('pca_components', pca_components)
 
-        pca_output_dim = self.pca_components.shape[1]
+        pca_output_dim = 64
         c_initial = 64  # Channels after initial convolution
         c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
-
+        self.low_pass_conv_pca_replace = nn.Conv1d(input_channels, pca_output_dim, kernel_size=3, padding="same")
+        self.bn_initial_pca_replace = nn.BatchNorm1d(pca_output_dim)
+        self.relu_initial = nn.ReLU()
         # 1. Low-pass filter after PCA
-        self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
+        self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2, stride=4)
         self.bn_initial = nn.BatchNorm1d(48)
         self.relu_initial = nn.ReLU()
 
-        self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=4)  # T: 200 -> 50
+        self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=2)  # T: 200 -> 50
         self.bn_ds1 = nn.BatchNorm1d(64)
         self.relu_ds1 = nn.ReLU()
 
@@ -109,9 +109,15 @@ class PCAFeatureExtractor(nn.Module):
     def forward(self, x):
         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
         # PCA projection
-        x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+        if self.pca_components is not None:
+            x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
+            x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+        else:
+            x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
+            x = self.low_pass_conv_pca_replace(x)
+            x = self.bn_initial_pca_replace(x)
+            x = self.relu_initial(x)
 
-        x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
 
         # 1. Low-pass filter
         x = self.low_pass_conv(x)  # (B, 128, 200)
@@ -410,44 +416,167 @@ class Predictor(nn.Module):
         return predicted_targets
 
 
-class Transformer_Encoder(nn.Module):
+
+class Transformer_Encoder(torch.nn.Module):
     """
-    Transformer Encoder module.
+    Enhanced Transformer Encoder module with masking support and standard positional encoding.
     Processes a sequence of tokens and applies self-attention.
     Uses learnable positional embeddings based on the token's original absolute index.
     Handles variable sequence lengths using padding masks.
     """
 
-    def __init__(self, d_model, nhead, num_layers,
-                 max_total_tokens):  # d_model is feature_dim, max_total_tokens is the max possible original index + 1
-        super().__init__()
+    def __init__(self, d_model, nhead, num_layers, max_total_tokens):
+        super(Transformer_Encoder, self).__init__()
+
         self.d_model = d_model
-        # Standard Transformer Encoder Layer.
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1)
-        # Stack of Transformer Encoder Layers.
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        # Learnable positional embeddings for each possible original token position.
+
         self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
 
+        # Custom transformer encoder layers
+        self.layer_embedding_encoder = torch.nn.ModuleList([
+            Encoder(var_dim_feature=d_model, var_num_head=nhead, var_size_cnn=[1])
+            for _ in range(num_layers)
+        ])
+
+        # Final layer norm
+        self.layer_embedding_norm = torch.nn.LayerNorm(d_model, eps=1e-6)
+
     def forward(self, src, token_original_indices=None, src_key_padding_mask=None):
-        # Get positional embeddings based on original indices.
+        """
+        Args:
+            src: Input tensor of shape (batch_size, seq_len, d_model)
+            token_original_indices: Original indices for positional encoding
+            src_key_padding_mask: Mask for padded positions (True for padded positions)
+        """
+        # Get positional embeddings based on original indices
         if token_original_indices is None:
             token_original_indices = torch.arange(
                 src.shape[1], device=src.device, dtype=torch.long
             ).unsqueeze(0).expand(src.shape[0], -1)
+
         pos_embeddings = self.pos_encoder(token_original_indices)
 
         # Zero out positional embeddings for padded positions (if mask provided)
         if src_key_padding_mask is not None:
             pos_embeddings = pos_embeddings.masked_fill(src_key_padding_mask.unsqueeze(-1), 0)
 
-        src = src + pos_embeddings
+        # Add positional encodings
+        var_embedding = src + pos_embeddings
 
+        # Process through custom transformer encoder layers
+        for layer in self.layer_embedding_encoder:
+            var_embedding = var_embedding + layer(var_embedding, src_key_padding_mask)
+
+        # Apply final layer norm
+        var_embedding = self.layer_embedding_norm(var_embedding)
+
+        return var_embedding
+
+
+class Encoder(torch.nn.Module):
+    """
+    Enhanced custom encoder layer with masking support and improved FFN.
+    """
+
+    def __init__(self, var_dim_feature, var_num_head=10, var_size_cnn=[1]):
+        super(Encoder, self).__init__()
+
+        # First layer norm (pre-norm for attention)
+        self.layer_norm_0 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
+
+        # Multi-head attention
+        self.layer_attention = torch.nn.MultiheadAttention(
+            var_dim_feature, var_num_head, batch_first=True, dropout=0.1
+        )
+
+        # Dropout after attention
+        self.layer_dropout_0 = torch.nn.Dropout(0.1)
+
+        # Second layer norm (pre-norm for FFN)
+        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
+
+        # Enhanced FFN with 4x expansion (standard transformer practice)
+        self.ffn = torch.nn.Sequential(
+            torch.nn.Linear(var_dim_feature, var_dim_feature * 4),  # Expand
+            torch.nn.ReLU(),  # Standard activation
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(var_dim_feature * 4, var_dim_feature)  # Contract
+        )
+
+        # Dropout after FFN
+        self.layer_dropout_1 = torch.nn.Dropout(0.1)
+
+    def forward(self, var_input, src_key_padding_mask=None):
+        """
+        Args:
+            var_input: Input tensor of shape (batch_size, seq_len, d_model)
+            src_key_padding_mask: Mask for padded positions (True for padded positions)
+        """
+        # Self-attention block with pre-norm
+        var_t = self.layer_norm_0(var_input)
+
+        # Apply attention with masking support
         if src_key_padding_mask is not None:
-            output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
+            var_t, _ = self.layer_attention(
+                var_t, var_t, var_t,
+                key_padding_mask=src_key_padding_mask
+            )
         else:
-            output = self.transformer_encoder(src)
-        return output
+            var_t, _ = self.layer_attention(var_t, var_t, var_t)
+
+        var_t = self.layer_dropout_0(var_t)
+
+        # First residual connection
+        var_t = var_t + var_input
+
+        # FFN block with pre-norm
+        var_s = self.layer_norm_1(var_t)
+        var_s = self.ffn(var_s)
+        var_s = self.layer_dropout_1(var_s)
+
+        # Second residual connection
+        var_output = var_s + var_t
+
+        return var_output
+
+# class Transformer_Encoder(nn.Module):
+#     """
+#     Transformer Encoder module.
+#     Processes a sequence of tokens and applies self-attention.
+#     Uses learnable positional embeddings based on the token's original absolute index.
+#     Handles variable sequence lengths using padding masks.
+#     """
+#
+#     def __init__(self, d_model, nhead, num_layers,
+#                  max_total_tokens):  # d_model is feature_dim, max_total_tokens is the max possible original index + 1
+#         super().__init__()
+#         self.d_model = d_model
+#         # Standard Transformer Encoder Layer.
+#         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1)
+#         # Stack of Transformer Encoder Layers.
+#         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+#         # Learnable positional embeddings for each possible original token position.
+#         self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
+#
+#     def forward(self, src, token_original_indices=None, src_key_padding_mask=None):
+#         # Get positional embeddings based on original indices.
+#         if token_original_indices is None:
+#             token_original_indices = torch.arange(
+#                 src.shape[1], device=src.device, dtype=torch.long
+#             ).unsqueeze(0).expand(src.shape[0], -1)
+#         pos_embeddings = self.pos_encoder(token_original_indices)
+#
+#         # Zero out positional embeddings for padded positions (if mask provided)
+#         if src_key_padding_mask is not None:
+#             pos_embeddings = pos_embeddings.masked_fill(src_key_padding_mask.unsqueeze(-1), 0)
+#
+#         src = src + pos_embeddings
+#
+#         if src_key_padding_mask is not None:
+#             output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
+#         else:
+#             output = self.transformer_encoder(src)
+#         return output
 
 
 class TransformerDecoder(nn.Module):
