@@ -55,6 +55,8 @@ def update_config_from_env(config):
         # Split by comma and strip whitespace
         environments = [env.strip() for env in os.environ['ENVIRONMENTS_EXP'].split(',')]
         config['data']['environment'] = environments
+    if 'SSL_COEF' in os.environ:
+        config['nn']["loss"]['SSL_coeff'] = float(os.environ['SSL_COEF'])
     return config
 
 
