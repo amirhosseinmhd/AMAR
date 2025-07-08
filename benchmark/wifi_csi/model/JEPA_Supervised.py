@@ -952,6 +952,27 @@ def train_hybrid_jepa(model: Module,
                 var_mode,
                 var_threshold
             )
+            if var_epoch % 25 == 0 or var_epoch == var_epochs - 1:
+                print(f"Generating t-SNE visualizations at var_epoch {var_epoch}...")
+                tsne_figure_dict = generate_tsne_visualizations(
+                    model,
+                    preset['data']['environment'],
+                    device,
+                    var_epoch
+                )
+
+                if tsne_figure_dict:
+                    fig = tsne_figure_dict["tsne_visualizations"]
+                    wandb.log({"t-SNE Visualizations": wandb.Image(fig)}, step=var_epoch)
+                    plt.close(fig)  # Close the figure to free memory
+
+            if var_epoch % 10 == 0 or var_epoch == var_epochs - 1:
+                print(f"Computing SVD statistics at var_epoch {var_epoch}...")
+                svd_stats = compute_representation_svd_stats(model, data_test_loader, device, max_samples=500)
+                if svd_stats:
+                    wandb.log({**svd_stats, "var_epoch": var_epoch}, step=var_epoch)
+                    print(f"SVD Stats - Effective Rank: {svd_stats.get('svd/effective_rank', 'N/A')}, "
+                          f"Condition Number: {svd_stats.get('svd/condition_number', 'N/A'):.2f}")
 
         # ===== CALCULATE AVERAGE LOSSES =====
         avg_total_loss = epoch_total_loss / num_batches
@@ -972,7 +993,7 @@ def train_hybrid_jepa(model: Module,
 
                 # Comprehensive wandb logging
                 wandb.log({
-                    f"{layer_idx}/epoch": var_epoch,
+                    f"{layer_idx}/var_epoch": var_epoch,
                     # Loss components - Training
                     f"{layer_idx}/total_loss_train": avg_total_loss,
                     f"{layer_idx}/supervised_loss_train": avg_supervised_loss,

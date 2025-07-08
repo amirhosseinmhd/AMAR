@@ -71,7 +71,7 @@ def generate_tsne_visualizations(model, environments, device, epoch):
             all_data_x.append(env_data_x)
             all_environment_labels.extend([env] * len(env_data_x))
 
-        y = encode_activity(data_pd_y)
+        y = encode_activity(data_pd_y, preset["encoding"]["activity"])
         data_y = np.array(y)
         num_people = data_y.sum(axis=1).sum(axis=1)
 
@@ -199,11 +199,11 @@ def compute_representation_svd_stats(model, dataloader, device, max_samples=1000
     model.eval()
     representations = []
     samples_processed = 0
-
     with torch.no_grad():
         for batch in dataloader:
-            # Handle both tuple and tensor batch formats
-            if isinstance(batch, tuple):
+            if isinstance(batch, list):
+                data_batch_x = batch[0]
+            elif isinstance(batch, tuple):
                 data_batch_x = batch[0]
             else:
                 data_batch_x = batch
