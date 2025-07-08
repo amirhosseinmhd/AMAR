@@ -20,7 +20,7 @@ modules_path = "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi"
 from sklearn.decomposition import PCA
 if modules_path not in sys.path:
     sys.path.insert(0, modules_path) # Insert at the beginning to prioritize it
-from model.modules.molecules import PCAFeatureExtractor
+from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder
 from train import train
 from preset import preset
 import torch.nn.functional as F
@@ -215,63 +215,6 @@ class MemoryPositionalEncoding(nn.Module):
         return pos_encoding
 
 
-class Encoder(torch.nn.Module):
-    #
-    ##
-    def __init__(self,
-                 var_dim_feature,
-                 var_num_head=10,
-                 var_size_cnn=[1, 3, 5]):
-        #
-        ##
-        super(Encoder, self).__init__()
-        #
-        ##
-        self.layer_norm_0 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-        self.layer_attention = torch.nn.MultiheadAttention(var_dim_feature,
-                                                           var_num_head,
-                                                           batch_first=True)
-        #
-        self.layer_dropout_0 = torch.nn.Dropout(0.1)
-        #
-        ##
-        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-        #
-        # Replace CNN layers with a standard FFN√√Dropout
-        self.ffn = torch.nn.Sequential(
-            torch.nn.Linear(var_dim_feature, var_dim_feature),  # Expand dimension (typically 4x)
-            torch.nn.LeakyReLU(),  # Standard activation in modern transformers
-            torch.nn.Dropout(0.1),
-            torch.nn.Linear(var_dim_feature, var_dim_feature)  # Project back to original dimension
-        )
-        #
-        self.layer_dropout_1 = torch.nn.Dropout(0.1)
-        # Add layer norm after FFN
-        self.layer_norm_2 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-    #
-    ##
-    def forward(self,
-                var_input):
-        #
-        ##
-        var_t = var_input
-        #
-        var_t = self.layer_norm_0(var_t)
-        #
-        var_t, _ = self.layer_attention(var_t, var_t, var_t)
-        var_t = self.layer_dropout_0(var_t)
-        #
-        var_t = var_t + var_input
-        #
-        ##
-        var_s = self.layer_norm_1(var_t)
-        var_s = self.ffn(var_s)
-        var_s = self.layer_dropout_1(var_s)
-        var_output = var_s + var_t
-        # Apply final layer norm
-        # var_output = self.layer_norm_2(var_output)
-        #
-        return var_output
 
 #
 ##
@@ -281,219 +224,181 @@ class Encoder(torch.nn.Module):
 #
 ##
 
-# Depthwise Separable Convolution
-class DepthwiseSeparableConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
-        super(DepthwiseSeparableConv, self).__init__()
-        self.depthwise = nn.Conv1d(
-            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
-        )
-        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
-
-    def forward(self, x):
-        x = self.depthwise(x)
-        x = self.pointwise(x)
-        return x
-
-# Dilated Convolution Block
-class DilatedConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dilation_rate):
-        super(DilatedConvBlock, self).__init__()
-        self.conv = nn.Conv1d(
-            in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
-        )
-        self.bn = nn.BatchNorm1d(out_channels)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        return x
-
-class Dilated_Blocks(nn.Module):
-    def __init__(self, output_channels):
-        super().__init__()
-
-        # Parallel dilated convolutions instead of sequential blocks
-        self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
-        self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
-        self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
-        self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
-
-        # 1x1 convolution to combine features (if needed)
-        self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
-
-        self.relu = nn.ReLU()
-    def forward(self, x):
-        # Parallel dilated convolutions
-        out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
-        out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
-        out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
-        out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
-        # Concatenate along channel dimension
-        out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
-
-        return out_concat
-        #
-# Channel Attention Mechanism
-class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction_ratio=8):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction_ratio),
-            nn.ReLU(),
-            nn.Linear(channels // reduction_ratio, channels),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        b, c, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1)
-        return x * y
+# # Depthwise Separable Convolution
+# class DepthwiseSeparableConv(nn.Module):
+#     def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
+#         super(DepthwiseSeparableConv, self).__init__()
+#         self.depthwise = nn.Conv1d(
+#             in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
+#         )
+#         self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+#
+#     def forward(self, x):
+#         x = self.depthwise(x)
+#         x = self.pointwise(x)
+#         return x
+#
+# # Dilated Convolution Block
+# class DilatedConvBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels, dilation_rate):
+#         super(DilatedConvBlock, self).__init__()
+#         self.conv = nn.Conv1d(
+#             in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
+#         )
+#         self.bn = nn.BatchNorm1d(out_channels)
+#         self.relu = nn.ReLU()
+#
+#     def forward(self, x):
+#         x = self.conv(x)
+#         x = self.bn(x)
+#         x = self.relu(x)
+#         return x
+#
+# class Dilated_Blocks(nn.Module):
+#     def __init__(self, output_channels):
+#         super().__init__()
+#
+#         # Parallel dilated convolutions instead of sequential blocks
+#         self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
+#         self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
+#         self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
+#         self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
+#
+#         # 1x1 convolution to combine features (if needed)
+#         self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
+#
+#         self.relu = nn.ReLU()
+#     def forward(self, x):
+#         # Parallel dilated convolutions
+#         out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
+#         out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
+#         out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
+#         out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
+#         # Concatenate along channel dimension
+#         out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
+#
+#         return out_concat
+#         #
+# # Channel Attention Mechanism
+# class ChannelAttention(nn.Module):
+#     def __init__(self, channels, reduction_ratio=8):
+#         super(ChannelAttention, self).__init__()
+#         self.avg_pool = nn.AdaptiveAvgPool1d(1)
+#         self.fc = nn.Sequential(
+#             nn.Linear(channels, channels // reduction_ratio),
+#             nn.ReLU(),
+#             nn.Linear(channels // reduction_ratio, channels),
+#             nn.Sigmoid(),
+#         )
+#
+#     def forward(self, x):
+#         b, c, _ = x.size()
+#         y = self.avg_pool(x).view(b, c)
+#         y = self.fc(y).view(b, c, 1)
+#         return x * y
 
 
 # Backbone Network
-class CNNFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
-        super(CNNFeatureExtractor, self).__init__()
-        self.embedding_time_dim = embedding_time_dim
-
-        c_initial = 128  # Channels after initial convolution
-        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
-
-        # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
-        self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
-        self.bn_initial = nn.BatchNorm1d(c_initial)
-        self.relu_initial = nn.ReLU()
-        
-        self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
-        self.bn_ds1 = nn.BatchNorm1d(c_initial)
-        self.relu_ds1 = nn.ReLU()
-
-        # 2. Hierarchical Dilated Convolutions (on T=100)
-        # Input: (B, c_initial, 100)
-        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
-        # Reduce channels in the last hierarchical block
-        self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4) 
-        # Output: (B, c_hierarchical_out, 100)
-
-        # 3. Second Temporal Reduction (T: 100 -> 50)
-        # Input: (B, c_hierarchical_out, 100)
-        self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
-        self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-        self.relu_ds2 = nn.ReLU()
-        # Output: (B, c_hierarchical_out, 50)
-
-        # 4. Channel Adjustment to output_channels (T: 50)
-        # Input: (B, c_hierarchical_out, 50)
-        self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-        self.bn_adjust = nn.BatchNorm1d(output_channels)
-        self.relu_adjust = nn.ReLU()
-        # Output: (B, output_channels, 50)
-
-        # 5. Parallel Dilated Convolutions (on T=50)
-        # Input: (B, output_channels, 50)
-        self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
-        self.bn_parallel = nn.BatchNorm1d(output_channels)
-        self.relu_parallel = nn.ReLU()
-        # Output: (B, output_channels, 50)
-
-        # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
-        # Input: (B, output_channels, 50)
-        current_T = 50
-        target_T = 10
-        
-        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-                                              kernel_size=5, stride=5, padding=2)
-        self.bn_final = nn.BatchNorm1d(output_channels)
-        self.relu_final = nn.ReLU()
-        # Output: (B, output_channels, embedding_time_dim)
-
-    def forward(self, x):
-        # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
-        x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
-
-        # 1. Initial Processing & First Temporal Reduction
-        x = self.initial_conv(x) #d from 270 ->128
-        x = self.bn_initial(x)
-        x = self.relu_initial(x)
-        
-        x = self.ds_conv1(x) # T: 200 -> 100
-        x = self.bn_ds1(x)
-        x = self.relu_ds1(x)
-
-        # 2. Hierarchical Dilated Convolutions
-        x = self.hierarchical_dilated_1(x)
-        x = self.hierarchical_dilated_2(x)
-        x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
-
-        # 3. Second Temporal Reduction
-        x = self.ds_conv2(x) # T: 100 -> 50
-        x = self.bn_ds2(x)
-        x = self.relu_ds2(x)
-
-        # 4. Channel Adjustment
-        x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
-        x = self.bn_adjust(x)
-        x = self.relu_adjust(x)
-        
-        # 5. Parallel Dilated Convolutions
-        x = self.parallel_dilated_blocks(x)
-        x = self.bn_parallel(x)
-        x = self.relu_parallel(x)
-
-        # 6. Final Temporal Reduction
-        x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
-        x = self.bn_final(x)
-        x = self.relu_final(x)
-        
-        # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
-        return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
-
-
-class Transformer_Encoder(torch.nn.Module):
-    #
-    ##
-    def __init__(self,
-                 var_embedding_shape,
-                 num_attention_heads=2,
-                 num_transformer_encoder_layers=4):
-        #
-        ##
-        super(Transformer_Encoder, self).__init__()
-        #
-        var_dim_feature = var_embedding_shape[-1]
-        var_dim_time = var_embedding_shape[-2]
-
-        self.layer_embedding_gaussian = Gaussian_Position(var_dim_feature, var_dim_time)  # 100 tokens for left stream
+# class CNNFeatureExtractor(nn.Module):
+#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
+#         super(CNNFeatureExtractor, self).__init__()
+#         self.embedding_time_dim = embedding_time_dim
+#
+#         c_initial = 128  # Channels after initial convolution
+#         c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
+#
+#         # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
+#         self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
+#         self.bn_initial = nn.BatchNorm1d(c_initial)
+#         self.relu_initial = nn.ReLU()
+#
+#         self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
+#         self.bn_ds1 = nn.BatchNorm1d(c_initial)
+#         self.relu_ds1 = nn.ReLU()
+#
+#         # 2. Hierarchical Dilated Convolutions (on T=100)
+#         # Input: (B, c_initial, 100)
+#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
+#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
+#         # Reduce channels in the last hierarchical block
+#         self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+#         # Output: (B, c_hierarchical_out, 100)
+#
+#         # 3. Second Temporal Reduction (T: 100 -> 50)
+#         # Input: (B, c_hierarchical_out, 100)
+#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
+#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
+#         self.relu_ds2 = nn.ReLU()
+#         # Output: (B, c_hierarchical_out, 50)
+#
+#         # 4. Channel Adjustment to output_channels (T: 50)
+#         # Input: (B, c_hierarchical_out, 50)
+#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
+#         self.bn_adjust = nn.BatchNorm1d(output_channels)
+#         self.relu_adjust = nn.ReLU()
+#         # Output: (B, output_channels, 50)
+#
+#         # 5. Parallel Dilated Convolutions (on T=50)
+#         # Input: (B, output_channels, 50)
+#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
+#         self.bn_parallel = nn.BatchNorm1d(output_channels)
+#         self.relu_parallel = nn.ReLU()
+#         # Output: (B, output_channels, 50)
+#
+#         # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
+#         # Input: (B, output_channels, 50)
+#         current_T = 50
+#         target_T = 10
+#
+#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
+#                                               kernel_size=5, stride=5, padding=2)
+#         self.bn_final = nn.BatchNorm1d(output_channels)
+#         self.relu_final = nn.ReLU()
+#         # Output: (B, output_channels, embedding_time_dim)
+#
+#     def forward(self, x):
+#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
+#         x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
+#
+#         # 1. Initial Processing & First Temporal Reduction
+#         x = self.initial_conv(x) #d from 270 ->128
+#         x = self.bn_initial(x)
+#         x = self.relu_initial(x)
+#
+#         x = self.ds_conv1(x) # T: 200 -> 100
+#         x = self.bn_ds1(x)
+#         x = self.relu_ds1(x)
+#
+#         # 2. Hierarchical Dilated Convolutions
+#         x = self.hierarchical_dilated_1(x)
+#         x = self.hierarchical_dilated_2(x)
+#         x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
+#
+#         # 3. Second Temporal Reduction
+#         x = self.ds_conv2(x) # T: 100 -> 50
+#         x = self.bn_ds2(x)
+#         x = self.relu_ds2(x)
+#
+#         # 4. Channel Adjustment
+#         x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
+#         x = self.bn_adjust(x)
+#         x = self.relu_adjust(x)
+#
+#         # 5. Parallel Dilated Convolutions
+#         x = self.parallel_dilated_blocks(x)
+#         x = self.bn_parallel(x)
+#         x = self.relu_parallel(x)
+#
+#         # 6. Final Temporal Reduction
+#         x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
+#         x = self.bn_final(x)
+#         x = self.relu_final(x)
+#
+#         # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
+#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
 
-        self.layer_embedding_encoder = torch.nn.ModuleList([Encoder(var_dim_feature=var_dim_feature,
-                                                               var_num_head=num_attention_heads,
-                                                               var_size_cnn=[1])
-                                                       for _ in range(num_transformer_encoder_layers)])
-        #
-        self.layer_embedding_norm = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-
-
-    #
-    ##
-    def forward(self, var_embedding):
-        # Apply Gaussian position encoding
-        var_embedding = self.layer_embedding_gaussian(var_embedding)  # Output: (batch_size, 100, features)
-
-        # Process left stream through transformer encoders
-        for layer in self.layer_embedding_encoder:
-            var_embedding = var_embedding + layer(var_embedding)
-        var_embedding = self.layer_embedding_norm(var_embedding)
-
-
-        return var_embedding
 
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=270, nhead=5, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
@@ -509,7 +414,7 @@ class TransformerDecoder(nn.Module):
         # query_embed = torch.randn(num_queries, d_model)
         # self.register_buffer('query_embed', query_embed)
 
-        self.memory_pos_encoding = MemoryPositionalEncoding(d_model, seq_length, dropout)
+        self.memory_pos_encoding = None
 
         # Create decoder layers
         decoder_layer = TransformerDecoderLayer(
@@ -541,14 +446,13 @@ class TransformerDecoder(nn.Module):
         Returns:
             outputs: List of output predictions from each decoder layer
         """
-        B = memory.shape[0]
+        B, seq_len, _ = memory.shape
 
         # Initialize decoder input with zero queries
         tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
         # Get positions
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
-        
         if self.training and self.query_dropout_rate > 0:
             num_queries = query_pos.shape[1]
             num_to_drop = int(num_queries * self.query_dropout_rate)
@@ -564,8 +468,9 @@ class TransformerDecoder(nn.Module):
                 
                 # Apply mask by broadcasting: (B, num_queries, d_model) * (1, num_queries, 1)
                 query_pos = query_pos * query_mask.unsqueeze(0).unsqueeze(-1)
+        position_ids = torch.arange(seq_len, device=memory.device).unsqueeze(0).expand(B, -1)
+        memory_pos = self.memory_pos_encoding(position_ids)  # Pass indices, not memory
 
-        memory_pos = self.memory_pos_encoding(memory)
         # Store intermediate outputs
         intermediate = []
 
@@ -577,7 +482,6 @@ class TransformerDecoder(nn.Module):
                 memory=memory,
                 query_pos=query_pos,
                 memory_pos=memory_pos  # New parameter passed to layer
-
             )
 
             pred = self.class_embed(output)
@@ -667,11 +571,13 @@ class DETR_MultiUser(nn.Module):
         super().__init__()
         # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
         self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"],
-                                                     embedding_time_dim=preset["cnn_embedding_time_dim"],
-                                                                pca_components=pca_embeddings)
+                                                     embedding_time_dim=preset["cnn_embedding_time_dim"])
+                                                                # pca_components=pca_embeddings)
         var_embedding_shape = (embedding_time_dim, features_dim)
-        self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
-                                           num_transformer_encoder_layers=8)
+        # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
+        #                                    num_transformer_encoder_layers=8)
+        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=8,
+                 max_total_tokens=preset["nn"]["token_length"])
         self.decoder = TransformerDecoder(
             d_model=features_dim,
             nhead=n_attention_heads,
@@ -683,7 +589,7 @@ class DETR_MultiUser(nn.Module):
             seq_length=embedding_time_dim,
             query_dropout_rate=query_dropout_rate 
         )
-
+        self.decoder.memory_pos_encoding = self.encoder.pos_encoder
     def forward(self, x):
         # Extracting Features
 
@@ -691,7 +597,7 @@ class DETR_MultiUser(nn.Module):
         batch_size = x.shape[0]
         num_segments = preset["nn"]["token_length"]
 
-        segment_length = int(x.shape[1]/num_segments)
+        segment_length = preset["jepa"]["segment_length"]  # Length of each segment
         input_channels = x.shape[2]
 
         # Reshape x for batch processing of all segments by the feature_extractor
@@ -994,7 +900,9 @@ def run_that_detr(data_train_x,
                                     dim_feedforward=preset["nn"]["dim_FFN"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     pca_embeddings=pca_components).to(device)
-        # wandb.watch(
+
+        model_detr.feature_extractor = torch.compile(model_detr.feature_extractor, mode="default")
+        model_detr.decoder = torch.compile(model_detr.decoder, mode="default")        # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
         #     log_freq=50,  # Frequency of logging
