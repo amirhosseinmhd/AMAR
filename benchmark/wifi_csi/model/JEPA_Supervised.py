@@ -87,6 +87,7 @@ class JEPA_Sup(nn.Module):
             temp_cross_attention=temp_cross,
             query_dropout_rate=query_dropout_rate
         )
+        self.decoder.memory_pos_encoding = self.online_transformer_encoder.pos_encoder
 
     @torch.no_grad()
     def extract_representations(self, x_raw_input):
@@ -435,9 +436,13 @@ class JEPA_Sup(nn.Module):
         # z_context_online shape: (batch_size, max_context_tokens_in_batch, preset["nn"]["d_embedding"])
 
         # --- Step 4: Pass Context Tokens through Decoder ---
+        if self.training:
+            src_key_padding_mask = sampling_info["context_mask"]
+        else:
+            src_key_padding_mask = None
         outputs_class = self.decoder(
             z_context_online,
-            src_key_padding_mask=sampling_info["context_mask"]
+            src_key_padding_mask=src_key_padding_mask
         )
 
         return {

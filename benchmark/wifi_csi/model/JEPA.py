@@ -27,8 +27,7 @@ from preset import preset
 from utils import *
 from utils import NumpyEncoder
 
-# Compute dynamic configuration values
-preset["cnn_embedding_time_dim"] = int(preset["jepa"]["segment_length"] / 40)
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

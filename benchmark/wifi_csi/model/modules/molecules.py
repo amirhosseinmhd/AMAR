@@ -434,7 +434,7 @@ class Transformer_Encoder(torch.nn.Module):
 
         # Custom transformer encoder layers
         self.layer_embedding_encoder = torch.nn.ModuleList([
-            Encoder(var_dim_feature=d_model, var_num_head=nhead, var_size_cnn=[1])
+            Encoder(var_dim_feature=d_model, var_num_head=nhead)
             for _ in range(num_layers)
         ])
 
@@ -478,7 +478,7 @@ class Encoder(torch.nn.Module):
     Enhanced custom encoder layer with masking support and improved FFN.
     """
 
-    def __init__(self, var_dim_feature, var_num_head=10, var_size_cnn=[1]):
+    def __init__(self, var_dim_feature, var_num_head=10):
         super(Encoder, self).__init__()
 
         # First layer norm (pre-norm for attention)
@@ -610,6 +610,7 @@ class TransformerDecoder(nn.Module):
 
         tgt_embed = torch.zeros(num_queries, d_model)  # Using randn instead of zeros for random initialization
         self.register_buffer('tgt_embed', tgt_embed)
+        self.memory_pos_encoding = None
 
     def forward(self, context_tokens, src_key_padding_mask=None):
         """
@@ -625,13 +626,15 @@ class TransformerDecoder(nn.Module):
             outputs: List of output predictions from each decoder layer
                     Shape: [num_layers, batch_size, num_queries, num_classes]
         """
-        B = context_tokens.shape[0]
+        B, seq_len, _ = context_tokens.shape
 
         # Initialize decoder input with zero queries
         tgt = self.tgt_embed.unsqueeze(0).expand(B, -1, -1)
 
         # Get query positions
         query_pos = self.query_embed.unsqueeze(0).expand(B, -1, -1)
+        position_ids = torch.arange(seq_len, device=context_tokens.device).unsqueeze(0).expand(B, -1)
+        memory_pos = self.memory_pos_encoding(position_ids)
 
         # Store intermediate outputs
         intermediate = []
@@ -643,8 +646,8 @@ class TransformerDecoder(nn.Module):
                 tgt=output,
                 memory=context_tokens,
                 query_pos=query_pos,
-                memory_pos=None,  # Context tokens already have positional information
-                key_padding_mask=src_key_padding_mask  # Pass padding mask
+                memory_pos=memory_pos,
+                key_padding_mask=src_key_padding_mask 
             )
 
             pred = self.class_embed(output)

@@ -11,7 +11,7 @@ preset = {
     "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
     "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "test",
-    "model": "multi_user",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "JEPA_HYB",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR, JEPA_HYB
     # "model": "MLP",
@@ -48,54 +48,53 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 4e-4,                                     # learning rate
+        "lr": 5e-4,                                     # learning rate
         "epoch": 400,                                   # number of epochs
-        "batch_size":32,                              # batch size
+        "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
-            "num_warmup_epochs": 10,  # number of warmup epochs
-            "min_lr_ratio": 0.05  # minimum learning rate ratio
+            "num_warmup_epochs": 3,  # number of warmup epochs
+            "min_lr_ratio": 0.1  # minimum learning rate ratio
         },
         # Loss function parameters
         "loss": {
-            "SSL_coeff": 0.5 ,
+            "SSL_coeff": 0.2 ,
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.05,  # label smoothing factor
+            "label_smoothing": 0.3,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
         "weight_decay": 1e-6,
         "num_obj_queries": 5,
-        "num_decoder_layers": 2,
+        "num_decoder_layers": 5,
         "dim_FFN": 512,
-        "token_length": 145,
-        "d_embedding": 48,
-        "n_attention_heads": 4,
+        "token_length": 36, #74
+        "d_embedding": 64,
+        "n_attention_heads": 8,
         "query_dropout_rate": 0.0
     },
     "jepa": {
-
-        "segment_length": 200,              # Number of timestamps in each segment.
-        "num_segments_total_view": 14,      # Total number of segments considered in a single processing view.
-        "encoder_layers": 3,                # Number of layers in the Transformer Encoder.
-        "ema_decay": 0.9996,                 # Decay rate for the Exponential Moving Average of target encoder weights.
+        "segment_length": 80,              # Number of timestamps in each segment.
+        "num_segments_total_view": 36,      # Total number of segments considered in a single processing view.
+        "encoder_layers": 8,                # Number of layers in the Transformer Encoder.
+        "ema_decay": 0.9998,                 # Decay rate for the Exponential Moving Average of target encoder weights.
         "num_target_blocks": 4,             # Number of target blocks to sample and predict.
-        "target_block_size_segments": 3,    # Number of contiguous segments forming a single target block.
+        "target_block_size_segments": 5,    # Number of contiguous segments forming a single target block.
 
         # --- Predictor Specific Configurations ---
         # The "narrow" dimension of the predictor's internal Transformer.
         "predictor_d_model": 32,
-        "predictor_attention_heads": 4,       # Number of attention heads in the Predictor's Transformer.
-        "predictor_layers": 2,                # Number of layers in the Predictor's Transformer.
+        "predictor_attention_heads": 8,       # Number of attention heads in the Predictor's Transformer.
+        "predictor_layers": 3,                # Number of layers in the Predictor's Transformer.
         "sampling_weight_decay_factor": 0.9,  # Factor to reduce weights after sampling
         "sampling_weight_reset_interval": 1000,  # Reset weights every N times
         "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
         "loss":{
             "prediction_coef": 1,
-            "vicreg_coeff": 0.001,
+            "vicreg_coeff": 0.1,
             "vicreg_std_coeff": 25.0,
             "vicreg_cov_coeff": 1.0
             }
