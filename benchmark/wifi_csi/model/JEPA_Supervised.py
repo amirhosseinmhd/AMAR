@@ -51,7 +51,6 @@ class JEPA_Sup(nn.Module):
         self.total_num_epoch = preset["nn"]["epoch"]
 
         self.online_cnn_feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=features_dim,
-                                                                embedding_time_dim=embedding_time_dim,
                                                                 pca_components=pca_components)
 
         self.online_transformer_encoder = Transformer_Encoder(
@@ -868,6 +867,7 @@ def train_hybrid_jepa(model: Module,
             if model.training:
                 data_batch_x = apply_augmentation(data_batch_x)
 
+            optimizer.zero_grad()
 
             # Forward pass through hybrid model
             model_outputs = model(data_batch_x)
@@ -889,7 +889,6 @@ def train_hybrid_jepa(model: Module,
             total_loss = loss_dict['total_loss']
 
             # Backward pass and optimization
-            optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
 
