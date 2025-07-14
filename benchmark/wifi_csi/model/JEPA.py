@@ -438,7 +438,7 @@ class JEPA(nn.Module):
         }
 
 
-def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10, 
+def train_jepa(jepa_model, dataloader_train, dataloader_test, optimizer, device, num_epochs=10,
                           resume_from=None, checkpoint_dir=None, checkpoint_interval=10,
                           # VICReg hyperparameters
                           prediction_coeff=1.0,
@@ -454,7 +454,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     
     Args:
         jepa_model: JEPA model to train
-        dataloader: Training data loader
+        dataloader_train: Training data loader
         optimizer: Optimizer
         device: Device to train on
         num_epochs: Number of training epochs
@@ -516,8 +516,8 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     jepa_model.train()
     
     # Calculate total iterations for EMA updates
-    total_iters = num_epochs * len(dataloader)
-    current_iter = start_epoch * len(dataloader)
+    total_iters = num_epochs * len(dataloader_train)
+    current_iter = start_epoch * len(dataloader_train)
 
     for epoch in range(start_epoch, num_epochs):
         total_loss = 0
@@ -527,7 +527,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
         total_vicreg_cov_loss = 0
         num_batches = 0
         
-        for batch_idx, data_batch_x in enumerate(dataloader):
+        for batch_idx, (data_batch_x, data_batch_y) in enumerate(dataloader_train):
             # For JEPADataset, data_batch_x is just the tensor
             # For regular DataLoader with TensorDataset, data_batch_x is a tuple (data, _)
             if isinstance(data_batch_x, tuple):
@@ -612,7 +612,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             print(f"Generating t-SNE visualizations at epoch {epoch}...")
             tsne_figure_dict = generate_tsne_visualizations(
                 jepa_model, 
-                preset['data']['environment'][1],
+                dataloader_train,
                 device, 
                 epoch
             )
@@ -624,7 +624,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
 
         if epoch % 10 == 0 or epoch == num_epochs - 1:
             print(f"Computing SVD statistics at epoch {epoch}...")
-            svd_stats = compute_representation_svd_stats(jepa_model, dataloader, device, max_samples=500)
+            svd_stats = compute_representation_svd_stats(jepa_model, dataloader_train, device, max_samples=500)
             if svd_stats:
                 wandb.log({**svd_stats, "epoch": epoch}, step=epoch)
                 print(f"SVD Stats - Effective Rank: {svd_stats.get('svd/effective_rank', 'N/A')}, "
@@ -686,7 +686,15 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     wandb.finish()
     return best_state_dict
 
-def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epochs=50, batch_size=16, resume_from=None):
+
+
+
+def run_JEPA(data_train_x,
+                     data_train_y,
+                     data_test_x,
+                     data_test_y,
+                     var_repeat=10,
+                     resume_from=None):
     """
     Run JEPA SSL training on specified environments.
     Args:
@@ -707,45 +715,23 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
         device = torch.device("cpu")
 
     print(f"Using device: {device}")
+    environments = preset["data"]["environment"]
+    num_epochs = preset["nn"]["epoch"]
+    
 
-    # Load CSI data from specified environments
-    all_data_x = []
-    print("Loading data for environments:", environments)
-    for env in environments:
-        # Load labels first to get the list of CSI files
-        data_pd_y = load_data_y(
-            preset["path"]["data_y"],
-            var_environment=[env],
-            var_wifi_band=preset["data"]["wifi_band"],
-            var_num_users=preset["data"]["num_users"]
-        )
-
-        # Extract label list (needed for load_data_x)
-        var_label_list = data_pd_y["label"].to_list()
-
-        # Load CSI amplitude (we only need X for SSL)
-        env_data_x = load_data_x(preset["path"]["data_x"], var_label_list)
-        all_data_x.append(env_data_x)
-        print(f"Loaded {len(env_data_x)} samples from {env}")
-
-    # Combine data from all environments
-    data_x = np.concatenate(all_data_x, axis=0)
-    del all_data_x
-    print(f"Total training data: {len(data_x)} samples")
-
-    # Reshape data to match expected input format
-    data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
-    var_x_shape = data_x[0].shape
+    var_x_shape = data_train_x[0].shape
 
     # data_x_mean = np.mean(data_x, axis=1)
     # pca = PCA(n_components=50)
     # pca.fit(data_x_mean)
     # pca_components = torch.from_numpy(pca.components_.T).float().to(device)
     # Create dataset and dataloader
-    jepa_dataset = JEPADataset(data_x)
-    del data_x
-    dataloader = DataLoader(jepa_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
-    del jepa_dataset
+    jepa_dataset_train = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
+    jepa_dataset_test = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
+
+    dataloader_train = DataLoader(jepa_dataset_train, batch_size=preset["nn"]["batch_size"], shuffle=True, pin_memory=True)
+    dataloader_test = DataLoader(jepa_dataset_test, batch_size=preset["nn"]["batch_size"], shuffle=True, pin_memory=True)
+
     jepa_model = JEPA().to(device)
     jepa_model.online_cnn_feature_extractor = torch.compile(jepa_model.online_cnn_feature_extractor,
                                                                 mode="default")
@@ -770,16 +756,11 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     )
     
     print("Starting JEPA SSL training...")
-    best_state_dict = train_jepa(
-        jepa_model=jepa_model,
-        dataloader=dataloader,
-        optimizer=optimizer,
-        device=device,
-        num_epochs=num_epochs,
-        resume_from=resume_from,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_interval=50
-    )
+    best_state_dict = train_jepa(jepa_model=jepa_model, dataloader_train=dataloader_train,dataloader_test=dataloader_test,
+                                 optimizer=optimizer, device=device,
+                                 num_epochs=num_epochs, resume_from=resume_from,
+                                 checkpoint_dir=checkpoint_dir,
+                                 checkpoint_interval=50)
 
     model_filename = f"jepa_ssl_final_{'+'.join(environments)}_{timestamp}.pth"
     model_path = os.path.join(checkpoint_dir, model_filename)
@@ -806,75 +787,46 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
     
     return best_state_dict
 
-def resume_jepa_training(checkpoint_path, environments=None, num_epochs=None, batch_size=None):
-    """
-    Resume JEPA training from a checkpoint
+# def resume_jepa_training(checkpoint_path, environments=None, num_epochs=None, batch_size=None):
+#     """
+#     Resume JEPA training from a checkpoint
     
-    Args:
-        checkpoint_path: Path to checkpoint file
-        environments: Optional override for environments to train on
-        num_epochs: Optional override for number of epochs
-        batch_size: Optional override for batch size
+#     Args:
+#         checkpoint_path: Path to checkpoint file
+#         environments: Optional override for environments to train on
+#         num_epochs: Optional override for number of epochs
+#         batch_size: Optional override for batch size
     
-    Returns:
-        saved_model_path: Path to the saved model
-    """
-    if not os.path.exists(checkpoint_path):
-        raise ValueError(f"Checkpoint file not found: {checkpoint_path}")
+#     Returns:
+#         saved_model_path: Path to the saved model
+#     """
+#     if not os.path.exists(checkpoint_path):
+#         raise ValueError(f"Checkpoint file not found: {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    config = checkpoint.get('config', {})
+#     checkpoint = torch.load(checkpoint_path, map_location='cpu')
+#     config = checkpoint.get('config', {})
     
-    if environments is None and "environment" in config:
-        environments = config["environment"]
-    elif environments is None:
-        environments = ["meeting_room", "empty_room", "classroom"]
+#     if environments is None and "environment" in config:
+#         environments = config["environment"]
+#     elif environments is None:
+#         environments = ["meeting_room", "empty_room", "classroom"]
         
-    if num_epochs is None and 'epoch' in config:
-        num_epochs = config['epoch']
-    elif num_epochs is None:
-        num_epochs = 50
+#     if num_epochs is None and 'epoch' in config:
+#         num_epochs = config['epoch']
+#     elif num_epochs is None:
+#         num_epochs = 50
         
-    if batch_size is None and 'batch_size' in config:
-        batch_size = config['batch_size']
-    elif batch_size is None:
-        batch_size = 16
+#     if batch_size is None and 'batch_size' in config:
+#         batch_size = config['batch_size']
+#     elif batch_size is None:
+#         batch_size = 16
     
-    return run_jepa(
-        environments=environments,
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        resume_from=checkpoint_path
-    )
+#     return run_jepa(
+#         environments=environments,
+#         num_epochs=num_epochs,
+#         batch_size=batch_size,
+#         resume_from=checkpoint_path
+#     )
 
 
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Train or resume JEPA model')
-    parser.add_argument('--resume', type=str, help='Path to checkpoint to resume training from')
-    parser.add_argument('--epochs', type=int, default=preset["nn"]["epoch"], help='Number of epochs to train')
-    parser.add_argument('--batch-size', type=int, default=16, help='Batch size for training')
-    parser.add_argument('--envs', nargs='+', default=preset["data"]["environment"],
-                        help='Environments to train on')
-    
-    args = parser.parse_args()
-    
-    preset["nn"]["epoch"] = args.epochs
-    preset["data"]["environment"] = args.envs
-    preset["batch_size"] = args.batch_size
-    
-    if args.resume:
-        state_dicts = resume_jepa_training(
-            args.resume,
-            environments=args.envs,
-            num_epochs=args.epochs,
-            batch_size=args.batch_size
-        )
-    else:
-        state_dicts = run_jepa(
-            environments=args.envs,
-            num_epochs=args.epochs,
-            batch_size=args.batch_size
-        )
 
