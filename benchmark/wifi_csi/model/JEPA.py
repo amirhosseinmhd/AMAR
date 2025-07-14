@@ -38,6 +38,65 @@ from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, Tr
 from model.modules.helper import save_checkpoint, load_checkpoint, get_cosine_schedule_with_warmup, generate_tsne_visualizations, compute_representation_svd_stats
 
 
+class LinearProbe(nn.Module):
+    """A simple linear layer for probing the quality of representations."""
+    def __init__(self, input_dim, num_classes):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, num_classes)
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+def run_linear_probe(jepa_model, dataloader, device, probe_epochs=5):
+    """Trains and evaluates a linear probe on the representations from the JEPA model."""
+    jepa_model.eval()  # Freeze JEPA model
+
+    # --- Extract representations and labels ---
+    all_representations = []
+    all_num_people = []
+    with torch.no_grad():
+        for batch_x, batch_y in dataloader:
+            data_batch_x = batch_x.to(device)
+            representations = jepa_model.extract_representations(data_batch_x)
+            all_representations.append(representations)
+            
+            # Calculate number of people from labels
+            num_people = batch_y[:, :, :-1].sum(axis=(1, 2))
+            all_num_people.append(num_people)
+
+    representations_tensor = torch.cat(all_representations, dim=0)
+    labels_tensor = torch.cat(all_num_people, dim=0).long().to(device)
+
+    # --- Train the probe ---
+    probe_model = LinearProbe(input_dim=representations_tensor.shape[1], num_classes=int(labels_tensor.max()) + 1).to(device)
+    probe_optimizer = torch.optim.Adam(probe_model.parameters(), lr=1e-3)
+    probe_criterion = nn.CrossEntropyLoss()
+    
+    probe_dataset = TensorDataset(representations_tensor, labels_tensor)
+    probe_dataloader = DataLoader(probe_dataset, batch_size=preset["nn"]["batch_size"], shuffle=True)
+
+    for _ in range(probe_epochs):
+        for reps, labels in probe_dataloader:
+            probe_optimizer.zero_grad()
+            outputs = probe_model(reps)
+            loss = probe_criterion(outputs, labels)
+            loss.backward()
+            probe_optimizer.step()
+
+    # --- Evaluate the probe ---
+    final_loss = 0
+    final_mae = 0
+    with torch.no_grad():
+        outputs = probe_model(representations_tensor)
+        final_loss = probe_criterion(outputs, labels_tensor).item()
+        predictions = torch.argmax(outputs, dim=1)
+        final_mae = torch.abs(predictions - labels_tensor).float().mean().item()
+
+    jepa_model.train()  # Set JEPA model back to train mode
+    return final_loss, final_mae
+
+
 class JEPA(nn.Module):
     """
     Implements the Joint Embedding Predictive Architecture (JEPA).
@@ -606,6 +665,25 @@ def train_jepa(jepa_model, dataloader_train, dataloader_test, optimizer, device,
             "vicreg_std_loss": avg_vicreg_std_loss,
             "vicreg_cov_loss": avg_vicreg_cov_loss,
         }, step=epoch)
+
+        # --- Linear Probing ---
+        if epoch % 10 == 0 or epoch == num_epochs - 1:
+            print(f"Running linear probe at epoch {epoch}...")
+            # Evaluate on training set
+            probe_loss_train, probe_mae_train = run_linear_probe(jepa_model, dataloader_train, device)
+            print(f"  Probe Train - Loss: {probe_loss_train:.4f}, MAE: {probe_mae_train:.4f}")
+            
+            # Evaluate on test set
+            probe_loss_test, probe_mae_test = run_linear_probe(jepa_model, dataloader_test, device)
+            print(f"  Probe Test - Loss: {probe_loss_test:.4f}, MAE: {probe_mae_test:.4f}")
+
+            wandb.log({
+                "probe/train_loss": probe_loss_train,
+                "probe/train_mae": probe_mae_train,
+                "probe/test_loss": probe_loss_test,
+                "probe/test_mae": probe_mae_test,
+            }, step=epoch)
+
 
         # Generate t-SNE visualizations every 25 epochs or on the last epoch
         if epoch % 25 == 0 or epoch == num_epochs - 1:
