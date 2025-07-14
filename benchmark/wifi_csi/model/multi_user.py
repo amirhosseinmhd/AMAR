@@ -26,9 +26,9 @@ from preset import preset
 import torch.nn.functional as F
 from utils import *
 import wandb
+from torch.nn import Module
 from collections import Counter
 import itertools # Ensure itertools is imported
-from model.JEPA import JEPA_Model, PCAFeatureExtractor as JEPA_CNNFeatureExtractor, Transformer_Encoder as JEPA_Transformer_Encoder # Import JEPA components
 
 # JEPA_CONFIG = preset["jepa"]
 # JEPA_CONFIG.update(preset["nn"])  # Merge with neural network hyperparameters
@@ -324,8 +324,8 @@ class DETR_MultiUser(nn.Module):
                  dim_feedforward_decoder: int,
                  query_dropout_rate: float,
                  # Pre-trained components and their config
-                 pretrained_cnn_feature_extractor: JEPA_CNNFeatureExtractor,
-                 pretrained_transformer_encoder: JEPA_Transformer_Encoder,
+                 pretrained_cnn_feature_extractor: Module,
+                 pretrained_transformer_encoder: Module,
                  jepa_config: dict
                 ):
         super().__init__()

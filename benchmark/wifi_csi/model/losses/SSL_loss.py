@@ -172,6 +172,6 @@ class CombinedJEPALoss(nn.Module):
         vicreg_losses = self.vicreg_loss(z_context_pooled)
         
         # 4. Combined loss: invariance (prediction) + VICReg regularization terms
-        total_loss = self.prediction_coeff * invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
+        total_loss = (1 - self.vicreg_coeff )* invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
         
         return total_loss, invariance_loss,  vicreg_losses['std_loss'], vicreg_losses['cov_loss']

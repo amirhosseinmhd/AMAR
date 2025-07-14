@@ -26,812 +26,19 @@ from load_data import load_data_x, load_data_y
 from preset import preset
 from utils import *
 from utils import NumpyEncoder
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-class VICRegLoss(nn.Module):
-    """
-    VICReg Loss implementation for C-JEPA following the exact pseudocode:
-    - sim_loss: between context and target embeddings
-    - std_loss: applied only to context embeddings
-    - cov_loss: applied only to context embeddings
-    """
-    
-    def __init__(self, 
-                 std_coeff=25.0,
-                 cov_coeff=1.0,
-                 gamma=1.0,
-                 eps=1e-4):
-        """
-        Args:
-            sim_coeff: Coefficient for similarity (invariance) loss
-            std_coeff: Coefficient for variance loss  
-            cov_coeff: Coefficient for covariance loss
-            gamma: Target standard deviation for variance regularization
-            eps: Small value for numerical stability
-        """
-        super().__init__()
-        self.std_coeff = std_coeff
-        self.cov_coeff = cov_coeff
-        self.gamma = gamma
-        self.eps = eps
-
-    
-    def variance_loss(self, z):
-        """
-        Variance loss: Ensures representation variance doesn't collapse
-        Args:
-            z: Tensor of shape (batch_size, feature_dim)
-        """
-        batch_size, feature_dim = z.shape
-        std_z = torch.sqrt(z.var(dim=0) + self.eps)  # Standard deviation along batch dimension
-        std_loss = torch.mean(F.relu(self.gamma - std_z))  # Hinge loss
-        return std_loss
-    
-    def covariance_loss(self, z):
-        """
-        Covariance loss: Decorrelates features by minimizing off-diagonal covariance
-        Args:
-            z: Tensor of shape (batch_size, feature_dim)
-        """
-        batch_size, feature_dim = z.shape
-        z_centered = z - z.mean(dim=0)  # Center the features
-        
-        # Compute covariance matrix
-        cov_matrix = torch.mm(z_centered.T, z_centered) / (batch_size - 1)
-        
-        # Zero out diagonal and sum squared off-diagonal elements
-        off_diag_mask = ~torch.eye(feature_dim, dtype=torch.bool, device=z.device)
-        cov_loss = (cov_matrix[off_diag_mask] ** 2).sum() / feature_dim
-        
-        return cov_loss
-    
-    def forward(self, predictions, actual_targets, z_context_pooled):
-        """
-        Compute VICReg regularization terms (variance and covariance only):
-        - std_loss: applied to context embeddings  
-        - cov_loss: applied to context embeddings
-        
-        Note: Invariance/similarity loss is handled separately as the main prediction loss
-        
-        Args:
-            predictions: Not used (kept for interface compatibility)
-            actual_targets: Not used (kept for interface compatibility) 
-            z_context_pooled: Pooled context representations, shape (batch_size, feature_dim)
-        
-        Returns:
-            dict: Dictionary with total loss and individual components
-        """
-        # VICReg regularization terms applied only to context embeddings
-        std_loss = self.variance_loss(z_context_pooled)
-        cov_loss = self.covariance_loss(z_context_pooled)
-        
-        # Total VICReg regularization (variance + covariance only)
-        total_loss = (self.std_coeff * std_loss + self.cov_coeff * cov_loss)
-        
-        return {
-            'std_loss': std_loss,
-            'cov_loss': cov_loss,
-            'total_loss': total_loss,
-        }
-
-
-class CombinedJEPALoss(nn.Module):
-    """
-    Combined loss for JEPA with VICReg regularization following C-JEPA pseudocode:
-    
-    The invariance loss is the same as the original JEPA prediction loss (MSE between predictions and targets).
-    VICReg adds variance and covariance regularization to context embeddings.
-    
-    total_loss = prediction_loss + beta_vicreg * (beta_std * std_loss + beta_cov * cov_loss)
-    """
-    
-    def __init__(self, 
-                 prediction_coeff=1.0,
-                 vicreg_coeff=0.001,
-                 vicreg_std_coeff=25.0,
-                 vicreg_cov_coeff=1.0):
-        """
-        Args:
-            prediction_coeff: Coefficient for original JEPA prediction loss (includes invariance)
-            vicreg_coeff: Coefficient for VICReg loss (β_vicreg in paper)
-            vicreg_std_coeff: VICReg variance coefficient
-            vicreg_cov_coeff: VICReg covariance coefficient
-        """
-        super().__init__()
-        self.prediction_coeff = prediction_coeff
-        self.vicreg_coeff = vicreg_coeff
-        
-        # Only need variance and covariance components since invariance = prediction loss
-        self.vicreg_loss = VICRegLoss(
-            std_coeff=vicreg_std_coeff,
-            cov_coeff=vicreg_cov_coeff
-        )
-    
-    def pool_representations(self, representations, mask=None):
-        """
-        Pool representations by averaging, considering padding mask if provided
-        
-        Args:
-            representations: Tensor of shape (batch_size, seq_len, feature_dim)
-            mask: Optional padding mask (True for padded positions)
-        
-        Returns:
-            Pooled representations of shape (batch_size, feature_dim)
-        """
-        if mask is not None:
-            # Mask out padded positions
-            mask_expanded = mask.unsqueeze(-1).expand_as(representations)
-            representations_masked = representations.masked_fill(mask_expanded, 0)
-            
-            # Count valid positions
-            valid_counts = (~mask).sum(dim=1, keepdim=True).float()
-            valid_counts = torch.clamp(valid_counts, min=1)  # Avoid division by zero
-            
-            # Average only over valid positions
-            pooled = representations_masked.sum(dim=1) / valid_counts
-        else:
-            # Simple average if no mask
-            pooled = representations.mean(dim=1)
-            
-        return pooled
-    
-    def forward(self, predictions, actual_targets, z_context_online, context_padding_mask):
-        """
-        Compute combined JEPA + VICReg loss where:
-        - Invariance loss is applied to predicted tokens vs actual target tokens (replaces JEPA prediction loss)
-        - Variance/Covariance losses are applied to context embeddings
-        
-        Args:
-            predictions: Predicted target representations from predictor
-            actual_targets: Actual target representations (ground truth)
-            z_context_online: Context representations, shape (batch_size, context_len, feature_dim)
-            context_padding_mask: Padding mask for context, shape (batch_size, context_len)
-        
-        Returns:
-            dict: Dictionary with total loss and individual components
-        """
-        # 1. Invariance loss: between predicted tokens and actual target tokens (this IS the prediction loss)
-        invariance_loss = F.mse_loss(predictions, actual_targets)
-        
-        # 2. Pool context representations for variance/covariance losses
-        z_context_pooled = self.pool_representations(z_context_online, context_padding_mask)
-        
-        # 3. Apply VICReg variance and covariance losses to context embeddings
-        vicreg_losses = self.vicreg_loss(predictions, actual_targets, z_context_pooled)
-        
-        # 4. Combined loss: invariance (prediction) + VICReg regularization terms
-        total_loss = self.prediction_coeff * invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
-        
-        return {
-            'total_loss': total_loss,
-            'vicreg_total_loss': vicreg_losses['total_loss'],
-            'vicreg_sim_loss': invariance_loss,  # Same as prediction loss
-            'vicreg_std_loss': vicreg_losses['std_loss'],
-            'vicreg_cov_loss': vicreg_losses['cov_loss']
-        }
-
-class JEPADataset(torch.utils.data.Dataset):
-    """Custom dataset for JEPA training that only requires CSI data (no labels)"""
-
-    def __init__(self, data_x):
-        self.data_x = torch.from_numpy(data_x).float()
-
-    def __len__(self):
-        return len(self.data_x)
-
-    def __getitem__(self, idx):
-        return self.data_x[idx]
-class DepthwiseSeparableConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
-        super(DepthwiseSeparableConv, self).__init__()
-        self.depthwise = nn.Conv1d(
-            in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
-        )
-        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
-
-    def forward(self, x):
-        x = self.depthwise(x)
-        x = self.pointwise(x)
-        return x
-
-# Dilated Convolution Block
-class DilatedConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dilation_rate):
-        super(DilatedConvBlock, self).__init__()
-        self.conv = nn.Conv1d(
-            in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
-        )
-        self.bn = nn.BatchNorm1d(out_channels)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        return x
-
-class Dilated_Blocks(nn.Module):
-    def __init__(self, output_channels):
-        super().__init__()
-
-        # Parallel dilated convolutions instead of sequential blocks
-        self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
-        self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
-        self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
-        self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
-
-        # 1x1 convolution to combine features (if needed)
-        self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
-
-        self.relu = nn.ReLU()
-    def forward(self, x):
-        # Parallel dilated convolutions
-        out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
-        out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
-        out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
-        out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
-        # Concatenate along channel dimension
-        out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
-
-        return out_concat
-        #
-# Channel Attention Mechanism
-class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction_ratio=8):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction_ratio),
-            nn.ReLU(),
-            nn.Linear(channels // reduction_ratio, channels),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        b, c, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1)
-        return x * y
-
-
-class PCAFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=1, pca_components=None):
-        super(PCAFeatureExtractor, self).__init__()
-        self.embedding_time_dim = embedding_time_dim
-
-        if pca_components is None:
-            raise ValueError("PCA components must be provided.")
-        self.register_buffer('pca_components', pca_components)
-
-        pca_output_dim = self.pca_components.shape[1]
-        c_intermediate = 64  # Intermediate channel size
-
-        # 1. Simplified feature extraction and temporal reduction
-        # This single layer replaces the low-pass filter and the first ds_conv
-        # Assuming input time is 40, stride=4 reduces it to 10
-        self.feature_extractor = DepthwiseSeparableConv(pca_output_dim, c_intermediate, kernel_size=5, padding=2, stride=4)
-        self.bn1 = nn.BatchNorm1d(c_intermediate)
-        self.relu1 = nn.ReLU()
-
-        # 2. Channel Adjustment
-        self.channel_adjust = nn.Conv1d(c_intermediate, output_channels, kernel_size=1)
-        self.bn2 = nn.BatchNorm1d(output_channels)
-        self.relu2 = nn.ReLU()
-
-        # 3. Final Temporal Reduction to a single token
-        # From T=10 to T=1. Kernel size 10 and stride 10 will map 10 -> 1.
-        self.final_reduction_conv = nn.Conv1d(output_channels, output_channels, kernel_size=10, stride=10)
-        self.bn_final = nn.BatchNorm1d(output_channels)
-        self.relu_final = nn.ReLU()
-
-    def forward(self, x):
-        # Input x shape: (batch, time, channels_in) e.g. (B, 40, 270)
-        # PCA projection
-        x = torch.matmul(x, self.pca_components)  # (B, 40, pca_dim)
-
-        x = x.permute(0, 2, 1)  # (batch, pca_dim, time) e.g. (B, pca_dim, 40)
-
-        # 1. Feature extraction and temporal reduction
-        x = self.feature_extractor(x)  # T: 40 -> 10
-        x = self.bn1(x)
-        x = self.relu1(x)
-
-        # 2. Channel Adjustment
-        x = self.channel_adjust(x)
-        x = self.bn2(x)
-        x = self.relu2(x)
-
-        # 3. Final Temporal Reduction
-        x = self.final_reduction_conv(x)  # T: 10 -> 1
-        x = self.bn_final(x)
-        x = self.relu_final(x)
-
-        # Output shape: (batch, 1, output_channels)
-        return x.permute(0, 2, 1)
-
-# class PCAFeatureExtractor(nn.Module):
-#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
-#         super(PCAFeatureExtractor, self).__init__()
-#         self.embedding_time_dim = embedding_time_dim
-
-#         if pca_components is None:
-#             raise ValueError("PCA components must be provided.")
-#         self.register_buffer('pca_components', pca_components)
-
-#         pca_output_dim = self.pca_components.shape[1]
-#         c_initial = 64  # Channels after initial convolution
-#         c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
-
-#         # 1. Low-pass filter after PCA
-#         self.low_pass_conv = nn.Conv1d(pca_output_dim, 48, kernel_size=5, padding=2)
-#         self.bn_initial = nn.BatchNorm1d(48)
-#         self.relu_initial = nn.ReLU()
-
-#         self.ds_conv1 = DepthwiseSeparableConv(48, 64, kernel_size=5, padding=2, stride=4)  # T: 200 -> 50
-#         self.bn_ds1 = nn.BatchNorm1d(64)
-#         self.relu_ds1 = nn.ReLU()
-
-#         # 2. Hierarchical Dilated Convolutions (on T=50)
-#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
-#         # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
-
-#         # 3. Second Temporal Reduction (T: 50 -> 25)
-#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2)  # T: 100 -> 50
-#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-#         self.relu_ds2 = nn.ReLU()
-
-#         # 4. Channel Adjustment to output_channels (T: 25)
-#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-#         self.bn_adjust = nn.BatchNorm1d(output_channels)
-#         self.relu_adjust = nn.ReLU()
-
-#         # 5. Parallel Dilated Convolutions (on T=25)
-#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
-#         self.bn_parallel = nn.BatchNorm1d(output_channels)
-#         self.relu_parallel = nn.ReLU()
-
-#         # 6. Final Temporal Reduction (from T=25 to 5)
-#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-#                                               kernel_size=5, stride=5, padding=2)
-#         self.bn_final = nn.BatchNorm1d(output_channels)
-#         self.relu_final = nn.ReLU()
-
-#     def forward(self, x):
-#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
-#         # PCA projection
-#         x = torch.matmul(x, self.pca_components)  # (B, 200, 32)
-
-#         x = x.permute(0, 2, 1)  # (batch, channels_out_pca, time) e.g. (B, 32, 200)
-
-#         # 1. Low-pass filter
-#         x = self.low_pass_conv(x)  # (B, 128, 200)
-#         x = self.bn_initial(x)
-#         x = self.relu_initial(x)
-
-#         x = self.ds_conv1(x)  # T: 200 -> 100
-#         x = self.bn_ds1(x)
-#         x = self.relu_ds1(x)
-
-#         # 2. Hierarchical Dilated Convolutions
-#         x = self.hierarchical_dilated_1(x)
-#         x = self.hierarchical_dilated_2(x)
-#         # x = self.hierarchical_dilated_3(x)  # Channels: c_initial -> c_hierarchical_out =64
-
-#         # 3. Second Temporal Reduction
-#         x = self.ds_conv2(x)  # T: 100 -> 50
-#         x = self.bn_ds2(x)
-#         x = self.relu_ds2(x)
-
-#         # 4. Channel Adjustment
-#         x = self.channel_adjust_before_parallel(x)  # Channels: c_hierarchical_out -> output_channels
-#         x = self.bn_adjust(x)
-#         x = self.relu_adjust(x)
-
-#         # 5. Parallel Dilated Convolutions
-#         x = self.parallel_dilated_blocks(x)
-#         x = self.bn_parallel(x)
-#         x = self.relu_parallel(x)
-
-#         # 6. Final Temporal Reduction
-#         x = self.final_reduction_conv(x)  # T: 50 -> embedding_time_dim (approx)
-#         x = self.bn_final(x)
-#         x = self.relu_final(x)
-
-#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
-
-
-# class CNNFeatureExtractor(nn.Module):
-#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
-#         super(CNNFeatureExtractor, self).__init__()
-#         self.embedding_time_dim = embedding_time_dim
-#
-#         c_initial = 128  # Channels after initial convolution
-#         c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
-#
-#         # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
-#         self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
-#         self.bn_initial = nn.BatchNorm1d(c_initial)
-#         self.relu_initial = nn.ReLU()
-#
-#         self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
-#         self.bn_ds1 = nn.BatchNorm1d(c_initial)
-#         self.relu_ds1 = nn.ReLU()
-#
-#         # 2. Hierarchical Dilated Convolutions (on T=100)
-#         # Input: (B, c_initial, 100)
-#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
-#         # Reduce channels in the last hierarchical block
-#         # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
-#         # Output: (B, c_hierarchical_out, 100)
-#
-#         # 3. Second Temporal Reduction (T: 100 -> 50)
-#         # Input: (B, c_hierarchical_out, 100)
-#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
-#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-#         self.relu_ds2 = nn.ReLU()
-#         # Output: (B, c_hierarchical_out, 50)
-#
-#         # 4. Channel Adjustment to output_channels (T: 50)
-#         # Input: (B, c_hierarchical_out, 50)
-#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-#         self.bn_adjust = nn.BatchNorm1d(output_channels)
-#         self.relu_adjust = nn.ReLU()
-#         # Output: (B, output_channels, 50)
-#
-#         # 5. Parallel Dilated Convolutions (on T=50)
-#         # Input: (B, output_channels, 50)
-#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
-#         self.bn_parallel = nn.BatchNorm1d(output_channels)
-#         self.relu_parallel = nn.ReLU()
-#         # Output: (B, output_channels, 50)
-#
-#         # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
-#         # Input: (B, output_channels, 50)
-#
-#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-#                                               kernel_size=5, stride=5, padding=2)
-#         self.bn_final = nn.BatchNorm1d(output_channels)
-#         self.relu_final = nn.ReLU()
-#         # Output: (B, output_channels, embedding_time_dim)
-#
-#     def forward(self, x):
-#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
-#         x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
-#
-#         # 1. Initial Processing & First Temporal Reduction
-#         x = self.initial_conv(x) #d from 270 ->128
-#         x = self.bn_initial(x)
-#         x = self.relu_initial(x)
-#
-#         x = self.ds_conv1(x) # T: 200 -> 100
-#         x = self.bn_ds1(x)
-#         x = self.relu_ds1(x)
-#
-#         # 2. Hierarchical Dilated Convolutions
-#         x = self.hierarchical_dilated_1(x)
-#         x = self.hierarchical_dilated_2(x)
-#         # x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
-#
-#         # 3. Second Temporal Reduction
-#         x = self.ds_conv2(x) # T: 100 -> 50
-#         x = self.bn_ds2(x)
-#         x = self.relu_ds2(x)
-#
-#         # 4. Channel Adjustment
-#         x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
-#         x = self.bn_adjust(x)
-#         x = self.relu_adjust(x)
-#
-#         # 5. Parallel Dilated Convolutions
-#         x = self.parallel_dilated_blocks(x)
-#         x = self.bn_parallel(x)
-#         x = self.relu_parallel(x)
-#
-#         # 6. Final Temporal Reduction
-#         x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
-#         x = self.bn_final(x)
-#         x = self.relu_final(x)
-#
-#         # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
-#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
-class Predictor(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.encoder_d_model = preset["nn"]["d_embedding"]
-        self.predictor_d_model = preset["jepa"]["predictor_d_model"]
-        self.max_total_tokens_in_view = preset["jepa"]["num_segments_total_view"] * preset["cnn_embedding_time_dim"]
-
-        self.mask_token = nn.Parameter(torch.randn(1,1, self.predictor_d_model)) # This is a learnable shared token which we all of representation would contribute in learning it!
-
-        self.input_proj = nn.Linear(self.encoder_d_model, self.predictor_d_model)
-        self.pos_encoder = nn.Embedding(self.max_total_tokens_in_view, self.predictor_d_model)
-
-        predictor_encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.predictor_d_model,
-            nhead=preset["jepa"]["predictor_attention_heads"],
-            batch_first=True,
-            dropout=0.1
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            predictor_encoder_layer,
-            num_layers=preset["jepa"]["predictor_layers"],
-        )
-
-        self.output_proj = nn.Linear(self.predictor_d_model, self.encoder_d_model)
-
-        self.layer_norm_input = nn.LayerNorm(self.predictor_d_model)
-        self.layer_norm_output = nn.LayerNorm(self.encoder_d_model)
-
-    def forward(self, z_context_online, context_padding_mask, target_token_indices, context_indices):
-        """
-        Args:
-            z_context_online (torch.Tensor): Encoded context tokens from the online encoder.
-                                             Shape: (batch_size, num_context_tokens, encoder_d_model).
-            context_padding_mask (torch.Tensor): Boolean mask for z_context_online.
-                                                 Shape: (batch_size, num_context_tokens).
-            target_token_indices (torch.Tensor): The original absolute indices of the tokens to be predicted.
-                                                 Shape: (batch_size, num_target_tokens).
-
-        Returns:
-            torch.Tensor: The predicted token representations.
-                          Shape: (batch_size, num_target_tokens, encoder_d_model).
-        """
-        batch_size, num_target_tokens = target_token_indices.shape
-        target_pos_embeddings = self.pos_encoder(target_token_indices)  # Shape: (B, num_targets, predictor_dim)
-        # Create query tokens by combining the universal mask_token with specific positional info.
-        # self.mask_token is broadcast across the batch and target token dimensions.
-        query_tokens = self.mask_token + target_pos_embeddings  # Shape: (B, num_targets, predictor_dim)
-
-        # --- Step 2b: Project context tokens into predictor's dimension ---
-        projected_context = self.input_proj(z_context_online)  # Shape: (B, num_context, predictor_dim)
-#        context_indices = torch.arange(z_context_online.size(1), device=z_context_online.device).unsqueeze(0).expand(batch_size, -1)
-
-        context_pos_embedding = self.pos_encoder(context_indices)
-        projected_context = projected_context + context_pos_embedding
-######### Layer Norm
-        projected_context = self.layer_norm_input(projected_context)
-        query_tokens = self.layer_norm_input(query_tokens)
-
-        # --- Step 2c: Combine sequences and masks ---
-        # Concatenate context and query tokens to form the input for the predictor's transformer.
-        combined_sequence = torch.cat([projected_context, query_tokens], dim=1)
-
-        # Create the padding mask for the combined sequence.
-        # Queries are never padded, so their mask is all False.
-        query_padding_mask = torch.full(
-            (batch_size, num_target_tokens), fill_value=False, device=context_padding_mask.device
-        )
-        combined_mask = torch.cat([context_padding_mask, query_padding_mask], dim=1)
-
-
-        predictor_output = self.transformer_encoder(
-            src=combined_sequence,
-            src_key_padding_mask=combined_mask,
-        )
-
-        # --- Step 2e: Extract Predictions ---
-        # We only care about the outputs corresponding to the query tokens' positions.
-        num_context_tokens = z_context_online.shape[1]
-        predicted_tokens_narrow = predictor_output[:, num_context_tokens:, :]  # Shape: (B, num_targets, predictor_dim)
-
-        # --- Step 2f: Project predictions back to the original dimension ---
-        predicted_tokens_final = self.output_proj(predicted_tokens_narrow)  # Shape: (B, num_targets, encoder_dim)
-
-        # Optional final LayerNorm
-        predicted_tokens_final = self.layer_norm_output(predicted_tokens_final)
-
-        return predicted_tokens_final
-
-class Transformer_Encoder(nn.Module):
-    """
-    Transformer Encoder module.
-    Processes a sequence of tokens and applies self-attention.
-    Uses learnable positional embeddings based on the token's original absolute index.
-    Handles variable sequence lengths using padding masks.
-    """
-    def __init__(self, d_model, nhead, num_layers, max_total_tokens): # d_model is feature_dim, max_total_tokens is the max possible original index + 1
-        super().__init__()
-        self.d_model = d_model
-        # Standard Transformer Encoder Layer.
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1)
-        # Stack of Transformer Encoder Layers.
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        # Learnable positional embeddings for each possible original token position.
-        self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
-        self.layer_norm = nn.LayerNorm(d_model)
-
-    def forward(self, src, token_original_indices, src_key_padding_mask=None):
-        # Get positional embeddings based on original indices.
-        pos_embeddings = self.pos_encoder(token_original_indices)
-
-        # Zero out positional embeddings for padded positions (if mask provided)
-        if src_key_padding_mask is not None:
-            pos_embeddings = pos_embeddings.masked_fill(src_key_padding_mask.unsqueeze(-1), 0)
-
-        src = src + pos_embeddings
-        src = self.layer_norm(src)
-
-        if src_key_padding_mask is not None:
-            output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
-        else:
-            output = self.transformer_encoder(src)
-        return output
-
-
-
-class SegmentBlockSampler(nn.Module):
-    """
-    Samples target blocks and determines context segments for JEPA.
-    Ensures that target blocks are contiguous sets of segments and context segments are disjoint from target segments.
-    Outputs segment indices (for data extraction) and token indices (as tensors for positional encoding and loss),
-    including a padding mask for context tokens.
-
-    Uses dynamic weighting to ensure fair token sampling over multiple calls.
-    """
-
-    def __init__(self, weight_decay_factor=0.9):
-        super().__init__()
-        self.total_segments_in_view = preset["jepa"]["num_segments_total_view"]
-        self.num_target_blocks = preset["jepa"]["num_target_blocks"]
-        self.target_block_size_segments = preset["jepa"]["target_block_size_segments"]
-        self.tokens_per_segment = 1
-        self.tokens_per_target_block = self.target_block_size_segments * self.tokens_per_segment
-        self.weight_decay_factor = weight_decay_factor  # Factor to reduce weights of sampled indices
-
-        # Initialize dynamic weights for fair sampling
-        S = self.target_block_size_segments
-        T = self.total_segments_in_view
-        self.num_possible_starts = T - S + 1
-
-        # Start with uniform weights
-        self.sampling_weights = np.ones(self.num_possible_starts, dtype=float)/self.num_possible_starts
-
-    def _update_weights_after_sampling(self, start_segment):
-        """
-        Updates the sampling weights after a segment has been sampled.
-        Reduces weights for the sampled segment and its block to achieve fairer sampling.
-        """
-        # Reduce weights for all segments in the sampled block
-        block_end = min(start_segment + self.target_block_size_segments, self.num_possible_starts)
-
-        # Reduce weights for overlapping starting positions
-        self.sampling_weights[start_segment:block_end] *= self.weight_decay_factor
-
-        # Ensure no weight becomes zero (add small epsilon)
-        min_weight = 1e-4
-        self.sampling_weights = np.maximum(self.sampling_weights, min_weight)
-
-        # Normalize weights to maintain probability distribution
-        self.sampling_weights = self.sampling_weights / np.sum(self.sampling_weights)
-
-    def _get_fair_start_segment(self):
-        """
-        Selects a starting segment using the dynamic weighted probability distribution
-        to give all tokens a fairer chance of being selected over multiple samples.
-        """
-        possible_start_indices = np.arange(self.num_possible_starts)
-
-        # Sample using current weights
-        start_segment = np.random.choice(possible_start_indices, p=self.sampling_weights)
-
-        # Update weights for future sampling
-        self._update_weights_after_sampling(start_segment)
-
-        return start_segment
-
-    def reset_weights(self):
-        """
-        Resets the sampling weights to uniform distribution.
-        Useful for starting fresh or after a certain number of samples.
-        """
-        self.sampling_weights = np.ones(self.num_possible_starts, dtype=float)
-        self.sampling_weights = self.sampling_weights / np.sum(self.sampling_weights)
-
-    def get_weight_statistics(self):
-        """
-        Returns statistics about current sampling weights for monitoring fairness.
-        """
-        return {
-            'min_weight': np.min(self.sampling_weights),
-            'max_weight': np.max(self.sampling_weights),
-            'weight_std': np.std(self.sampling_weights),
-            'weight_mean': np.mean(self.sampling_weights),
-            'weights': self.sampling_weights.copy()
-        }
-
-    def forward(self, batch_size, device=torch.device("cpu")):
-        # Stores lists of segment indices for target blocks for each item in the batch.
-        batch_target_segment_indices_for_loss_list = []
-        # Stores lists of segment indices for context for each item in the batch.
-        batch_context_segment_indices_for_online_encoder_list = []
-
-        # Stores lists of token indices for target blocks (before converting to tensor).
-        batch_target_token_indices_list_of_lists = []
-        # Stores lists of token indices for context (before converting to tensor).
-        batch_context_token_indices_list_of_lists = []
-
-        max_context_tokens_for_batch = 0
-
-        for _ in range(batch_size):
-            all_possible_segment_indices = list(range(self.total_segments_in_view))
-            current_target_blocks_segments_for_item = []
-            current_target_blocks_tokens_for_item_list = []  # List of lists (tokens per block)
-            union_of_target_segments_for_item = set()
-
-            # Sample `num_target_blocks` target blocks.
-            for _ in range(self.num_target_blocks):
-                start_segment = self._get_fair_start_segment()
-                # Define the segments belonging to this block.
-                block_segments = list(range(start_segment, start_segment + self.target_block_size_segments))
-                current_target_blocks_segments_for_item.append(block_segments)
-                union_of_target_segments_for_item.update(block_segments)
-
-                # Convert segment indices to token indices for this block
-                block_token_indices = list(range(start_segment * self.tokens_per_segment,
-                                                 (start_segment + self.target_block_size_segments) * self.tokens_per_segment))
-                current_target_blocks_tokens_for_item_list.append(block_token_indices)
-
-            # Context segments are those not included in any target block.
-            context_segments_for_item = [s for s in all_possible_segment_indices if
-                                         s not in union_of_target_segments_for_item]
-            
-            # Convert context segment indices to token indices
-            context_token_indices_for_item = []
-            for seg_idx in context_segments_for_item:
-                start_token = seg_idx * self.tokens_per_segment
-                context_token_indices_for_item.extend(range(start_token, start_token + self.tokens_per_segment))
-            
-            if len(context_token_indices_for_item) > max_context_tokens_for_batch:
-                max_context_tokens_for_batch = len(context_token_indices_for_item)
-
-            batch_target_segment_indices_for_loss_list.append(current_target_blocks_segments_for_item)
-            batch_context_segment_indices_for_online_encoder_list.append(context_segments_for_item)
-            batch_target_token_indices_list_of_lists.append(current_target_blocks_tokens_for_item_list)
-            batch_context_token_indices_list_of_lists.append(context_token_indices_for_item)
-
-        # Convert context token indices to padded tensor and create mask
-        # Using 0 as padding_value, assuming 0 is a valid index but will be masked.
-        # Mask is True for padded elements.
-        context_token_indices_tensor = torch.full(
-            (batch_size, max_context_tokens_for_batch), 0, dtype=torch.long, device=device
-        )
-        context_padding_mask_tensor = torch.ones(
-            (batch_size, max_context_tokens_for_batch), dtype=torch.bool, device=device
-        )
-
-        for i, item_tokens_list in enumerate(batch_context_token_indices_list_of_lists):
-            if item_tokens_list: # if not empty
-                num_tokens = len(item_tokens_list)
-                context_token_indices_tensor[i, :num_tokens] = torch.tensor(item_tokens_list, dtype=torch.long, device=device)
-                context_padding_mask_tensor[i, :num_tokens] = False
-        
-        # Convert target token indices to tensor
-        # Shape: (batch_size, num_target_blocks, tokens_per_target_block)
-        target_block_token_indices_tensor = torch.zeros(
-            (batch_size, self.num_target_blocks, self.tokens_per_target_block), dtype=torch.long, device=device
-        )
-        for i, item_blocks_list in enumerate(batch_target_token_indices_list_of_lists):
-            for block_idx, block_tokens_list in enumerate(item_blocks_list):
-                if len(block_tokens_list) != self.tokens_per_target_block:
-                    raise ValueError(f"Sampler generated a target block with {len(block_tokens_list)} tokens, "
-                                     f"but expected {self.tokens_per_target_block} tokens.")
-                target_block_token_indices_tensor[i, block_idx, :] = torch.tensor(block_tokens_list, dtype=torch.long, device=device)
-
-        return {
-            "target_block_segment_indices_for_loss": batch_target_segment_indices_for_loss_list,
-            "context_segment_indices_for_online_encoder": batch_context_segment_indices_for_online_encoder_list,
-            "context_token_indices_tensor": context_token_indices_tensor,
-            "context_padding_mask_tensor": context_padding_mask_tensor,
-            "target_block_token_indices_tensor": target_block_token_indices_tensor,
-        }
-class JEPA_Model(nn.Module):
+from model.losses.SSL_loss import CombinedJEPALoss
+from model.losses.hybrid_loss import CombinedHybridLoss
+from model.losses.supervised_loss import HungarianMatchingLoss
+from model.data.datasets import JEPADataset
+from model.data.sampling import SegmentBlockSampler
+from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder, Predictor
+from model.modules.helper import save_checkpoint, load_checkpoint, get_cosine_schedule_with_warmup, generate_tsne_visualizations, compute_representation_svd_stats
+
+
+class JEPA(nn.Module):
     """
     Implements the Joint Embedding Predictive Architecture (JEPA).
     Consists of an online encoder, a target encoder (EMA of the online encoder),
@@ -852,9 +59,8 @@ class JEPA_Model(nn.Module):
         #     output_channels=preset["nn"]["d_embedding"],
         #     embedding_time_dim=preset["cnn_embedding_time_dim"] # This is tokens_per_segment for the CNN
         # )
-        self.online_cnn_feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"],
-                                                     embedding_time_dim=preset["cnn_embedding_time_dim"],
-                                                                pca_components=pca_components)
+        self.online_cnn_feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"])
+                                                               # pca_components=pca_components)
 
         self.online_transformer_encoder = Transformer_Encoder(
             d_model=preset["nn"]["d_embedding"],             # Feature dimension of tokens.
@@ -862,28 +68,22 @@ class JEPA_Model(nn.Module):
             num_layers=preset["jepa"]["encoder_layers"],
             max_total_tokens=self.max_total_tokens_in_view          # Capable of handling all tokens if needed.
         )
-        # --- Target Encoder (EMA of Online Encoder, not directly trained) ---
         self.target_cnn_feature_extractor = deepcopy(self.online_cnn_feature_extractor)
         self.target_transformer_encoder = deepcopy(self.online_transformer_encoder)
 
-        # Freeze parameters of the target encoder; they are updated via EMA.
         for param in self.target_cnn_feature_extractor.parameters():
             param.requires_grad = False
         for param in self.target_transformer_encoder.parameters():
             param.requires_grad = False
         self.ema_decay_base = preset["jepa"]["ema_decay"]
-        # Module for sampling target and context segments.
         self.sampler = SegmentBlockSampler(
             weight_decay_factor=preset["jepa"].get("sampling_weight_decay_factor", 0.9)  # Make configurable
         )
 
-        # Track sampling statistics
         self.sampling_call_count = 0
         self.last_weight_reset = 0
-        # Predictor module (currently a placeholder).
-        # This will take context representations and predict target representations.
-        self.predictor = Predictor()
-
+        self.predictor = Predictor(preset)
+        self.predictor.set_shared_pos_encoder(self.online_transformer_encoder.pos_encoder)
     @torch.no_grad()
     def extract_representations(self, x_raw_input):
         """
@@ -923,8 +123,9 @@ class JEPA_Model(nn.Module):
         """Updates the target encoder's weights as an EMA of the online encoder's weights."""
 
         # 1. Calculate the scheduled decay rate for the current iteration
-        ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * current_iter / total_iters) + 1) / 2
+        # ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * current_iter / total_iters) + 1) / 2
         # ema_decay = 1 - (1 - self.ema_decay_base) * (np.cos(np.pi * iter / self.max_iters) + 1) / 2
+        ema_decay = self.ema_decay_base + (1 - self.ema_decay_base) * (current_iter / total_iters)
 
         # 2. Update the CNN parameters using the scheduled decay rate
         for online_param, target_param in zip(self.online_cnn_feature_extractor.parameters(),
@@ -954,10 +155,10 @@ class JEPA_Model(nn.Module):
         # Output: Stacked tensor of extracted segments.
         # Shape: (num_chosen_segments_for_item, self.config["segment_length"], 270).
 
-        segments_to_extract = [] #  here we make a list of segments, each item in list correspond to one segment.
+        segments_to_extract = []  # here we make a list of segments, each item in list correspond to one segment.
         # Ensure segment_indices_list_for_item is not empty and contains valid indices
         if not segment_indices_list_for_item:
-             return torch.empty(0, preset["jepa"]["segment_length"], 270,
+            return torch.empty(0, preset["jepa"]["segment_length"], 270,
                                device=x_item_full_view.device)
 
         for seg_idx in segment_indices_list_for_item:
@@ -971,12 +172,11 @@ class JEPA_Model(nn.Module):
 
         return torch.stack(segments_to_extract, dim=0)
 
-    def _get_tokens_for_context(self, x_full_view_batch,
-                                         list_of_context_segment_indices,
-                                         sampled_context_token_indices_tensor,
-                                         sampled_context_padding_mask_tensor,
-                                         cnn_extractor,
-                                         transformer_encoder):
+    def _get_tokens_for_context(self,
+                                x_full_view_batch,
+                                context_mask,
+                                cnn_extractor,
+                                transformer_encoder):
         # x_full_view_batch: (batch_size, total_view_len, input_channels)
         # list_of_context_segment_indices: List (batch_size) of lists of segment indices.
         # sampled_context_token_indices_tensor: Tensor (batch_size, max_context_tokens_in_batch) - original token indices, padded.
@@ -989,77 +189,25 @@ class JEPA_Model(nn.Module):
         #   padded_context_original_indices: (batch_size, max_context_tokens_in_batch) - this is sampled_context_token_indices_tensor
 
         batch_size = x_full_view_batch.shape[0]
-        all_extracted_cnn_tokens_batch = [] # List of tensors, one per batch item (variable token lengths)
-        
-        # This is now the definitive max length for context tokens in this batch
-        max_context_tokens_in_batch = sampled_context_token_indices_tensor.shape[1]
 
-        for i in range(batch_size):
-            x_item_full_view = x_full_view_batch[i]
-            item_context_segment_indices = list_of_context_segment_indices[i] # Segment indices for extraction
-            
-            num_actual_tokens_for_item_i = (~sampled_context_padding_mask_tensor[i]).sum().item()
+        max_total_tokens = preset["jepa"]["num_segments_total_view"]
+        window_length = preset["jepa"]["segment_length"]
+        x_full_view_reshaped = x_full_view_batch.reshape(batch_size*max_total_tokens, window_length ,270)
+        token_cnn_output = cnn_extractor(x_full_view_reshaped) # batch_size*max_total_tokens, 1, 270
+        token_encoder_unmasked = token_cnn_output.reshape(batch_size, max_total_tokens, -1)
+        original_indices = torch.arange(
+            max_total_tokens,
+            device=x_full_view_batch.device
+        )
+        token_original_indices = original_indices.unsqueeze(0).expand(batch_size, -1)
 
-            if not item_context_segment_indices: # If no segments, then no tokens
-                if num_actual_tokens_for_item_i != 0:
-                    raise ValueError(f"Item {i} has no context segments but sampler mask indicates "
-                                     f"{num_actual_tokens_for_item_i} tokens.")
-                all_extracted_cnn_tokens_batch.append(
-                    torch.empty(0, preset["nn"]["d_embedding"], device=x_item_full_view.device))
-                continue
-            
-            segments_for_cnn_item = self._extract_segments_from_x(x_item_full_view, item_context_segment_indices)
-            
-            if segments_for_cnn_item.numel() == 0:
-                 if num_actual_tokens_for_item_i != 0:
-                    raise ValueError(f"Item {i} has empty extracted segments but sampler mask indicates "
-                                     f"{num_actual_tokens_for_item_i} tokens.")
-                 all_extracted_cnn_tokens_batch.append(
-                    torch.empty(0, preset["nn"]["d_embedding"], device=x_item_full_view.device))
-                 continue
+        context_embeddings = transformer_encoder(
+            src=token_encoder_unmasked,
+            token_original_indices=token_original_indices,
+            src_key_padding_mask=context_mask.bool()
+        )
 
-            cnn_tokens_item = cnn_extractor(segments_for_cnn_item) # (num_segs, tokens_per_seg, channels)
-            num_item_context_tokens_from_cnn = cnn_tokens_item.shape[0] * cnn_tokens_item.shape[1]
-            
-            # Check consistency between CNN output and sampler's mask
-            if num_item_context_tokens_from_cnn != num_actual_tokens_for_item_i:
-                raise ValueError(
-                    f"Mismatch in token counts for item {i}: CNN produced {num_item_context_tokens_from_cnn} tokens, "
-                    f"but sampler's mask indicates {num_actual_tokens_for_item_i} actual tokens. "
-                    f"Context segments: {item_context_segment_indices}"
-                )
-            
-            all_extracted_cnn_tokens_batch.append(
-                cnn_tokens_item.reshape(num_item_context_tokens_from_cnn, preset["nn"]["d_embedding"]))
-
-        # Pad the extracted CNN tokens to max_context_tokens_in_batch
-        # This tensor holds the actual token embeddings.
-        padded_context_tokens = torch.zeros(batch_size, max_context_tokens_in_batch, preset["nn"]["d_embedding"],
-                                            device=x_full_view_batch.device, dtype=all_extracted_cnn_tokens_batch[0].dtype if all_extracted_cnn_tokens_batch and all_extracted_cnn_tokens_batch[0].numel() > 0 else torch.float)
-
-
-        for i in range(batch_size):
-            tokens_item = all_extracted_cnn_tokens_batch[i] # This is a tensor of shape (num_actual_tokens_for_item_i, cnn_output_channels)
-            seq_len = tokens_item.shape[0] # This is num_actual_tokens_for_item_i
-            if seq_len > 0:
-                # We place the actual tokens at the beginning, matching how the mask and indices are structured
-                padded_context_tokens[i, :seq_len, :] = tokens_item
-        
-        # The original indices and the padding mask are now directly from the sampler
-        padded_context_original_indices = sampled_context_token_indices_tensor
-        context_padding_mask = sampled_context_padding_mask_tensor
-
-        if max_context_tokens_in_batch == 0:
-            # Return tensors with correct batch_size but 0 sequence length if no context tokens in batch
-             return (padded_context_tokens, # (B, 0, D)
-                    context_padding_mask,           # (B, 0)
-                    padded_context_original_indices) # (B, 0)
-
-
-        context_tokens_encoded = transformer_encoder(padded_context_tokens,
-                                                     token_original_indices=padded_context_original_indices,
-                                                     src_key_padding_mask=context_padding_mask)
-        return context_tokens_encoded 
+        return context_embeddings
 
     def _process_full_view_for_target_encoder(self, x_full_view_batch, cnn_extractor, transformer_encoder):
         # x_full_view_batch: Batch of full processing windows.
@@ -1217,6 +365,9 @@ class JEPA_Model(nn.Module):
             x_full_view_of_segments = x_raw_input[:, t_init: t_init + required_len, :]
 
         return x_full_view_of_segments
+    def update_ema(self, current_iter, total_iters):
+        """Wrapper to call the EMA update mechanism."""
+        self._update_ema(current_iter, total_iters)
 
     def forward(self, x_raw_input):
         # x_raw_input: Raw input time series.
@@ -1242,19 +393,13 @@ class JEPA_Model(nn.Module):
                 self.last_weight_reset = self.sampling_call_count
                 # print(f"Reset sampling weights at call {self.sampling_call_count}")
 
-        # sampling_info keys:
-        # "context_segment_indices_for_online_encoder": List (B) of lists (segment_indices)
-        # "target_block_segment_indices_for_loss": List (B) of lists (num_blocks) of lists (segment_indices_per_block)
-        # "context_token_indices_tensor": Tensor (B, max_context_len)
-        # "context_padding_mask_tensor": Tensor (B, max_context_len)
-        # "target_block_token_indices_tensor": Tensor (B, num_target_blocks, tokens_per_target_block)
+
 
         # --- Step 2: Process Full View with Target Encoder (EMA Path) ---
         # This generates representations for all possible tokens in the view using the target encoder.
-        with torch.no_grad(): # Target encoder is not trained via backpropagation.
+        with torch.no_grad():  # Target encoder is not trained via backpropagation.
             z_target_ema_all_tokens = self._process_full_view_for_target_encoder(
                 x_full_view_of_segments,
-
                 self.target_cnn_feature_extractor,
                 self.target_transformer_encoder
             )
@@ -1263,238 +408,35 @@ class JEPA_Model(nn.Module):
         actual_targets_for_loss = self._prepare_target_tokens_for_loss(
             batch_size,
             device,
-            sampling_info["target_block_token_indices_tensor"], # Use tensor of token indices
+            sampling_info["target_block_token_indices_tensor"],  # Use tensor of token indices
             z_target_ema_all_tokens
         )
-        context_original_indices, context_padding_mask = sampling_info["context_token_indices_tensor"], sampling_info["context_padding_mask_tensor"]
+        # context_original_indices, context_padding_mask = sampling_info["context_token_indices_tensor"], sampling_info[
+        #     "context_padding_mask_tensor"]
 
         # --- Step 3: Process Context Segments with Online Encoder (Online Path) ---
         z_context_online = self._get_tokens_for_context(
             x_full_view_of_segments,
-            sampling_info["context_segment_indices_for_online_encoder"],  # Original segment indices for data extraction
-            context_original_indices,
-            context_padding_mask,
+            sampling_info["context_mask"],  # Original segment indices for data extraction
             self.online_cnn_feature_extractor,
             self.online_transformer_encoder
         )
         # z_context_online shape: (batch_size, max_context_tokens_in_batch, preset["nn"]["d_embedding"])
-        # context_padding_mask shape: (batch_size, max_context_tokens_in_batch)
-        # context_original_indices shape: (batch_size, max_context_tokens_in_batch)
+
+        # --- Step 4: Pass Context Tokens through Decoder ---
+        if self.training:
+            src_key_padding_mask = sampling_info["context_mask"]
+        else:
+            src_key_padding_mask = None
+
 
         return {
             "z_context_online": z_context_online,
-            "actual_targets_for_loss": actual_targets_for_loss, # Renamed from actual_targets_for_loss_list
+            "actual_targets_for_loss": actual_targets_for_loss,  # Renamed from actual_targets_for_loss_list
             "z_target_ema_all_tokens": z_target_ema_all_tokens,
-            "sampling_info": sampling_info # Renamed from sampling_info_segments
+            "sampling_info": sampling_info  # Renamed from sampling_info_segments
         }
 
-    def update_ema(self, current_iter, total_iters):
-        """Wrapper to call the EMA update mechanism."""
-        self._update_ema(current_iter, total_iters)
-def save_checkpoint(state, is_best, checkpoint_dir, filename="checkpoint.pth"):
-    """Save checkpoint to disk
-    
-    Args:
-        state (dict): Contains model state_dict, optimizer state_dict, epoch, best_loss, etc.
-        is_best (bool): Whether this checkpoint is the best so far
-        checkpoint_dir (str): Directory to save the checkpoint
-        filename (str): Filename for the checkpoint
-    """
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    torch.save(state, os.path.join(checkpoint_dir, filename))
-    if is_best:
-        shutil.copy(os.path.join(checkpoint_dir, filename), 
-                    os.path.join(checkpoint_dir, 'best_model.pth'))
-        print(f"Saved best model to {os.path.join(checkpoint_dir, 'best_model.pth')}")
-def load_checkpoint(checkpoint_path, model, optimizer=None):
-    """Load checkpoint from disk
-    
-    Args:
-        checkpoint_path (str): Path to checkpoint file
-        model (nn.Module): Model to load weights into
-        optimizer (Optimizer, optional): Optimizer to load state into
-    
-    Returns:
-        dict: Checkpoint contents with epoch, best_loss, etc.
-    """
-    if not os.path.exists(checkpoint_path):
-        return None
-    
-    print(f"Loading checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
-    if optimizer is not None and 'optimizer_state_dict' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    return checkpoint
-def generate_tsne_visualizations(model, environments, device, epoch):
-    """
-    Generate t-SNE visualizations for each environment and a combined visualization
-    in a single figure with subplots.
-    
-    Args:
-        model: The JEPA model for generating representations
-        environments: List of environments to visualize
-        device: Device to run the model on
-        epoch: Current training epoch (for logging)
-        
-    Returns:
-        dict: Dictionary containing a single matplotlib figure for wandb logging
-    """
-    model.eval()  # Set model to evaluation mode
-    
-    num_envs = len(environments)
-    has_combined_plot = num_envs > 1
-    num_plots = num_envs + 1 if has_combined_plot else 1
-    
-    # Determine grid size for subplots
-    if num_plots <= 1:
-        nrows, ncols = 1, 1
-    elif num_plots == 2:
-        nrows, ncols = 1, 2
-    elif num_plots <= 4:
-        nrows, ncols = 2, 2
-    else:
-        nrows = math.ceil(num_plots / 2)
-        ncols = 2
-        
-    fig, axes = plt.subplots(nrows, ncols, figsize=(10 * ncols, 8 * nrows), squeeze=False)
-    axes = axes.flatten()
-
-    all_data_x = []
-    all_environment_labels = []
-    
-    # Process each environment separately
-    for i, env in enumerate(environments):
-        ax = axes[i]
-        print(f"Generating t-SNE visualization for {env}...")
-        
-        # Load data for this environment
-        data_pd_y = load_data_y(
-            preset["path"]["data_y"],
-            var_environment=[env],
-            var_wifi_band=preset["data"]["wifi_band"],
-            var_num_users=preset["data"]["num_users"]
-        )
-        var_label_list = data_pd_y["label"].to_list()
-        env_data_x = load_data_x(preset["path"]["data_x"], var_label_list)
-        
-        env_data_x = env_data_x.reshape(env_data_x.shape[0], env_data_x.shape[1], -1)
-        
-        if has_combined_plot:
-            all_data_x.append(env_data_x)
-            all_environment_labels.extend([env] * len(env_data_x))
-        
-        y = encode_activity(data_pd_y)
-        data_y = np.array(y)
-        num_people = data_y.sum(axis=1).sum(axis=1)
-        
-        dataset = TensorDataset(torch.from_numpy(env_data_x).float())
-        dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
-        
-        all_representations = []
-        with torch.no_grad():
-            for batch in dataloader:
-                data_batch_x = batch[0].to(device)
-                representations = model.extract_representations(data_batch_x)
-                all_representations.append(representations.cpu().numpy())
-                
-        representations_np = np.concatenate(all_representations, axis=0)
-        
-        tsne_model = TSNE(
-            n_components=2, 
-            perplexity=min(50, max(5, len(representations_np) // 5)),
-            random_state=42,
-            n_jobs=-1,
-            init='pca', 
-            learning_rate='auto'
-        )
-        tsne_results = tsne_model.fit_transform(representations_np)
-        
-        unique_labels = np.unique(num_people)
-        cmap = plt.get_cmap('tab10', max(8, len(unique_labels)))
-        
-        scatter = ax.scatter(
-            tsne_results[:, 0],
-            tsne_results[:, 1],
-            c=num_people,
-            cmap=cmap,
-            alpha=0.8,
-            s=40,
-            vmin=unique_labels.min() - 0.5,
-            vmax=unique_labels.max() + 0.5
-        )
-        
-        cbar = fig.colorbar(scatter, ax=ax, ticks=unique_labels, label="Number of People")
-        cbar.ax.tick_params(labelsize=10)
-        
-        ax.set_title(f"t-SNE of JEPA Reps - {env} (Epoch {epoch})")
-        ax.set_xlabel("t-SNE Dimension 1")
-        ax.set_ylabel("t-SNE Dimension 2")
-    
-    # Generate combined visualization if there are multiple environments
-    if has_combined_plot:
-        ax = axes[num_envs]
-        combined_data_x = np.concatenate(all_data_x, axis=0)
-        
-        dataset = TensorDataset(torch.from_numpy(combined_data_x).float())
-        dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
-        
-        all_representations = []
-        with torch.no_grad():
-            for batch in dataloader:
-                data_batch_x = batch[0].to(device)
-                representations = model.extract_representations(data_batch_x)
-                all_representations.append(representations.cpu().numpy())
-                
-        representations_np = np.concatenate(all_representations, axis=0)
-        
-        tsne_model = TSNE(
-            n_components=2, 
-            perplexity=min(50, max(5, len(representations_np) // 5)),
-            # max_iter=1000,
-            random_state=42, 
-            n_jobs=-1,
-            init='pca', 
-            learning_rate='auto'
-        )
-        tsne_results = tsne_model.fit_transform(representations_np)
-        
-        unique_envs = list(set(all_environment_labels))
-        env_to_id = {env: i for i, env in enumerate(unique_envs)}
-        env_ids = [env_to_id[env] for env in all_environment_labels]
-        
-        cmap = plt.get_cmap('tab10', len(unique_envs))
-        
-        scatter = ax.scatter(
-            tsne_results[:, 0],
-            tsne_results[:, 1],
-            c=env_ids,
-            cmap=cmap,
-            alpha=0.8,
-            s=40,
-            vmin=-0.5,
-            vmax=len(unique_envs) - 0.5
-        )
-        
-        cbar = fig.colorbar(scatter, ax=ax, ticks=range(len(unique_envs)), label="Environment")
-        cbar.ax.set_yticklabels(unique_envs)
-        cbar.ax.tick_params(labelsize=10)
-        
-        ax.set_title(f"t-SNE of JEPA Reps - All Environments (Epoch {epoch})")
-        ax.set_xlabel("t-SNE Dimension 1")
-        ax.set_ylabel("t-SNE Dimension 2")
-    
-    # Hide any unused subplots
-    for i in range(num_plots, len(axes)):
-        axes[i].set_visible(False)
-        
-    fig.suptitle(f'JEPA t-SNE Visualizations (Epoch {epoch})', fontsize=16, y=1.02)
-    plt.tight_layout(rect=[0, 0, 1, 1])
-
-    model.train()  # Return to training mode
-    return {"tsne_visualizations": fig}
 
 def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10, 
                           resume_from=None, checkpoint_dir=None, checkpoint_interval=10,
@@ -1596,46 +538,32 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             # Forward pass through JEPA model
             jepa_outputs = jepa_model(data_batch_x)
             
-            # Extract outputs
+            # Extract outputs for loss calculation
             z_context_online = jepa_outputs["z_context_online"]
             actual_targets_for_loss = jepa_outputs["actual_targets_for_loss"]
             sampling_info = jepa_outputs["sampling_info"]
-            context_padding_mask = sampling_info["context_padding_mask_tensor"]
-            context_original_indices = sampling_info["context_token_indices_tensor"]
-            
-            # Skip empty context (rare sampling cases)
-            if z_context_online.shape[1] == 0:
-                continue
-            
-            # Prediction (same as before)
-            b, num_blocks, tokens_per_block, d = actual_targets_for_loss.shape
-            
-            # 1. Reshape targets to fold the 'num_blocks' dimension into the batch dimension
-            target_indices = sampling_info["target_block_token_indices_tensor"].reshape(b * num_blocks, tokens_per_block)
-            actual_targets = actual_targets_for_loss.reshape(b * num_blocks, tokens_per_block, d)
-            
-            # 2. Expand context to match the new batch dimension
-            expanded_context = z_context_online.repeat_interleave(repeats=num_blocks, dim=0)
-            expanded_context_mask = context_padding_mask.repeat_interleave(repeats=num_blocks, dim=0)
-            expanded_context_indices = context_original_indices.repeat_interleave(repeats=num_blocks, dim=0)
-            
-            # 3. Perform prediction
+
+
+            # Perform prediction using the model's predictor
             predictions = jepa_model.predictor(
-                expanded_context,
-                expanded_context_mask,
-                target_indices,
-                expanded_context_indices
+                z_context_online,
+                sampling_info["context_mask"],
+                sampling_info["target_block_token_indices_tensor"]
             )
             
-            # 4. Calculate combined loss (Invariance as prediction loss + VICReg regularization)
-            loss_dict = combined_loss_fn(
+            # Reshape for loss
+            b, num_blocks, tokens_per_block, d = actual_targets_for_loss.shape
+            actual_targets = actual_targets_for_loss.reshape(b * num_blocks, tokens_per_block, d)
+            
+            # Calculate combined loss (Invariance as prediction loss + VICReg regularization)
+            total_loss_val, prediction_loss_val, std_loss_val, cov_loss_val = combined_loss_fn(
                 predictions=predictions,
                 actual_targets=actual_targets,
                 z_context_online=z_context_online,
-                context_padding_mask=context_padding_mask
+                context_padding_mask=sampling_info["context_mask"]
             )
             
-            loss = loss_dict['total_loss']
+            loss = total_loss_val
             
             # Backward and optimize
             loss.backward()
@@ -1647,10 +575,10 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
 
             # Accumulate losses for logging
             total_loss += loss.item()
-            total_prediction_loss += loss_dict['vicreg_sim_loss'].item()
-            total_vicreg_loss += loss_dict['vicreg_total_loss'].item()
-            total_vicreg_std_loss += loss_dict['vicreg_std_loss'].item()
-            total_vicreg_cov_loss += loss_dict['vicreg_cov_loss'].item()
+            total_prediction_loss += prediction_loss_val.item()
+            total_vicreg_std_loss += std_loss_val.item()
+            total_vicreg_cov_loss += cov_loss_val.item()
+            total_vicreg_loss += (std_loss_val.item() * combined_loss_fn.vicreg_loss.std_coeff + cov_loss_val.item() * combined_loss_fn.vicreg_loss.cov_coeff)
             num_batches += 1
         
         # Removed the epoch-level EMA update since we now update per iteration
@@ -1684,7 +612,7 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
             print(f"Generating t-SNE visualizations at epoch {epoch}...")
             tsne_figure_dict = generate_tsne_visualizations(
                 jepa_model, 
-                preset['data']['environment'], 
+                preset['data']['environment'][1],
                 device, 
                 epoch
             )
@@ -1758,195 +686,6 @@ def train_jepa(jepa_model, dataloader, optimizer, device, num_epochs=10,
     wandb.finish()
     return best_state_dict
 
-def encode_activity(data_pd_y,
-                    var_encoding=preset["encoding"]["activity"]):
-    """
-    [description]
-    : encode activity labels in a pandas dataframe
-    [parameter]
-    : data_pd_y: pandas dataframe, labels of different tasks
-    : var_encoding: dict, encoding of different activities
-    [return]
-    : data_activity_onehot_y: numpy array, onehot encoding for activity labels
-    """
-    #
-    ##
-    data_activity_pd_y = data_pd_y[["user_1_activity", "user_2_activity",
-                                    "user_3_activity", "user_4_activity",
-                                    "user_5_activity", "user_6_activity"]]
-    #
-    data_activity_y = data_activity_pd_y.to_numpy(copy = True).astype(str)
-    #
-    data_activity_onehot_y = np.array([[var_encoding[var_y] for var_y in var_sample] for var_sample in data_activity_y])
-    #
-    return data_activity_onehot_y
-def visualize_jepa_representations(model_state_dict, environments_to_load, device,pca_components=None):
-    """
-    Loads a trained JEPA model, extracts representations from a dataset,
-    and generates three types of t-SNE visualizations.
-    """
-    print("--- Starting JEPA Representation Visualization ---")
-    
-    # 1. ========== Load Model ==========
-
-    model = JEPA_Model(pca_components=pca_components).to(device)
-    model.load_state_dict(model_state_dict)
-    model.eval()
-
-    # 2. ========== Load Data ==========
-    print(f"Loading data for environments: {environments_to_load}")
-    # Load labels to get the list of CSI files
-    data_pd_y = load_data_y(
-        preset["path"]["data_y"],
-        var_environment=environments_to_load,
-        var_wifi_band=preset["data"]["wifi_band"],
-        var_num_users=preset["data"]["num_users"]
-    )
-    var_label_list = data_pd_y["label"].to_list()
-    
-    # Load CSI data (X) and labels (Y)
-    data_x = load_data_x(preset["path"]["data_x"], var_label_list)
-
-    #
-    ## load CSI amplitude
-
-    y = encode_activity(data_pd_y)
-
-    data_y = np.array(y) # Shape: (num_samples, 6, 9)
-    
-    # Process labels as described: sum over the 'users' axis
-    labels = data_y.sum(axis=1) # Shape: (num_samples, 9)
-    print(f"Loaded {len(data_x)} samples.")
-
-    # Reshape data to match model input
-    data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
-
-    # 3. ========== Extract Representations ==========
-    print("Extracting representations from the model...")
-    dataset = TensorDataset(torch.from_numpy(data_x).float())
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
-    
-    all_representations = []
-    for batch in dataloader:
-        data_batch_x = batch[0].to(device)
-        with torch.no_grad():
-            representations = model.extract_representations(data_batch_x)
-        all_representations.append(representations.cpu().numpy())
-        
-    representations_np = np.concatenate(all_representations, axis=0)
-    print(f"Representations extracted. Shape: {representations_np.shape}")
-
-    # 4. ========== Compute t-SNE ==========
-    print("Computing t-SNE... ")
-    tsne = TSNE(n_components=2, perplexity=30, random_state=42, n_jobs=-1)
-    tsne_results = tsne.fit_transform(representations_np)
-    print("t-SNE computation complete.")
-
-    # 5. ========== Generate Plots ==========
-
-    # Plot A: Visualize by Total Number of People
-    print("\n--- Generating Plot A: By Total Number of People ---")
-    num_people = labels.sum(axis=1)
-    create_tsne_plot(
-        tsne_results,
-        num_people,
-        title="t-SNE of JEPA Representations by Number of People",
-        legend_title="Number of People"
-    )
-
-    # Plot B: Visualize by Single-Person Activity
-    print("\n--- Generating Plot B: By Single-Person Activity ---")
-    is_single_person = (labels.sum(axis=1) == 1)
-    single_person_tsne = tsne_results[is_single_person]
-    single_person_labels = labels[is_single_person]
-    
-    if len(single_person_tsne) > 0:
-        # Get the activity index (0-8)
-        activity_class = single_person_labels.argmax(axis=1)
-        activity_class_names = [f"Activity {i}" for i in activity_class]
-        create_tsne_plot(
-            single_person_tsne,
-            activity_class_names,
-            title="t-SNE of Single-Person Activities",
-            legend_title="Activity"
-        )
-    else:
-        print("No single-person samples found in the dataset to plot.")
-
-    # Plot C: Visualize by Presence of Each Activity
-    print("\n--- Generating Plot C: By Presence of Each Activity ---")
-    num_activities = labels.shape[1]
-    for i in range(num_activities):
-        has_activity = labels[:, i] > 0
-        
-        # Meaningful labels for the legend
-        presence_labels = ["Contains" if x else "Does Not Contain" for x in has_activity]
-        
-        create_tsne_plot(
-            tsne_results,
-            presence_labels,
-            title=f"t-SNE Highlighting Presence of Activity {i}",
-            legend_title=f"Activity {i} Presence"
-        )
-def compute_representation_svd_stats(model, dataloader, device, max_samples=1000):
-    """
-    Compute simplified SVD statistics on model representations for monitoring representation collapse
-    
-    Args:
-        model: JEPA model
-        dataloader: DataLoader for sampling data
-        device: torch device
-        max_samples: Maximum number of samples to use for SVD analysis
-    
-    Returns:
-        dict: Simplified SVD statistics for logging (only 3 key metrics)
-    """
-    model.eval()
-    representations = []
-    samples_processed = 0
-    
-    with torch.no_grad():
-        for batch in dataloader:
-            # Handle both tuple and tensor batch formats
-            if isinstance(batch, tuple):
-                data_batch_x = batch[0]
-            else:
-                data_batch_x = batch
-            data_batch_x = data_batch_x.to(device)
-            
-            # Extract representations using the target encoder
-            batch_representations = model.extract_representations(data_batch_x)
-            representations.append(batch_representations.cpu().numpy())
-            
-            samples_processed += data_batch_x.shape[0]
-            if samples_processed >= max_samples:
-                break
-    
-    if not representations:
-        return {}
-    
-    # Concatenate all representations
-    representations = np.concatenate(representations, axis=0)
-    
-    # Compute SVD
-    U, s, Vt = np.linalg.svd(representations, full_matrices=False)
-    
-    # Compute simplified statistics focused on collapse detection
-    total_variance = np.sum(s**2)
-    explained_variance_ratio = (s**2) / total_variance
-    cumulative_variance = np.cumsum(explained_variance_ratio)
-    
-    # Effective rank (number of singular values needed to explain 90% of variance)
-    effective_rank = np.argmax(cumulative_variance >= 0.9) + 1
-    
-    stats = {
-        'svd/effective_rank': int(effective_rank),
-        'svd/condition_number': float(s[0] / s[-1]) if s[-1] > 1e-10 else float('inf'),
-        'svd/top_singular_value_ratio': float(s[0] / np.sum(s)),  # Dominance of first component
-    }
-    
-    model.train()  # Return to training mode
-    return stats
 def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epochs=50, batch_size=16, resume_from=None):
     """
     Run JEPA SSL training on specified environments.
@@ -1966,9 +705,9 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-    
+
     print(f"Using device: {device}")
-    
+
     # Load CSI data from specified environments
     all_data_x = []
     print("Loading data for environments:", environments)
@@ -1980,35 +719,42 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
             var_wifi_band=preset["data"]["wifi_band"],
             var_num_users=preset["data"]["num_users"]
         )
-        
+
         # Extract label list (needed for load_data_x)
         var_label_list = data_pd_y["label"].to_list()
-        
+
         # Load CSI amplitude (we only need X for SSL)
         env_data_x = load_data_x(preset["path"]["data_x"], var_label_list)
         all_data_x.append(env_data_x)
         print(f"Loaded {len(env_data_x)} samples from {env}")
-    
+
     # Combine data from all environments
     data_x = np.concatenate(all_data_x, axis=0)
+    del all_data_x
     print(f"Total training data: {len(data_x)} samples")
-    
+
     # Reshape data to match expected input format
     data_x = data_x.reshape(data_x.shape[0], data_x.shape[1], -1)
     var_x_shape = data_x[0].shape
 
-    data_x_mean = np.mean(data_x, axis=1)
-    pca = PCA(n_components=50)
-    pca.fit(data_x_mean)
-    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
+    # data_x_mean = np.mean(data_x, axis=1)
+    # pca = PCA(n_components=50)
+    # pca.fit(data_x_mean)
+    # pca_components = torch.from_numpy(pca.components_.T).float().to(device)
     # Create dataset and dataloader
     jepa_dataset = JEPADataset(data_x)
+    del data_x
     dataloader = DataLoader(jepa_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
-    
-    jepa_model = JEPA_Model(pca_components=pca_components).to(device)
-    jepa_model.max_iters = num_epochs * len(dataloader)  # Set max iterations for EMA updates
+    del jepa_dataset
+    jepa_model = JEPA().to(device)
+    jepa_model.online_cnn_feature_extractor = torch.compile(jepa_model.online_cnn_feature_extractor,
+                                                                mode="default")
+    jepa_model.target_cnn_feature_extractor = torch.compile(jepa_model.target_cnn_feature_extractor,
+                                                                mode="default")
+        # pca_components=pca_components).to(device)
+    # jepa_model.max_iters = num_epochs * len(dataloader)  # Set max iterations for EMA updates
 
-    macs, params = get_model_complexity_info(JEPA_Model(pca_components=pca_components.to(torch.device('cpu'))), var_x_shape, as_strings=False)
+    macs, params = get_model_complexity_info(JEPA(), var_x_shape, as_strings=False)
     print(f"Model Parameters: {params:,}, FLOPs: {macs * 2:,}")
     
     optimizer = optim.AdamW(
@@ -2016,10 +762,10 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
         lr=preset["nn"]["lr"],
         weight_decay=preset["nn"]["weight_decay"]
     )
-    
+
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     checkpoint_dir = os.path.join(
-        preset["path"].get("models_dir", "./saved_models"), 
+        preset["path"].get("models_dir", "./saved_models"),
         f"jepa_ssl_{'+'.join(environments)}_{timestamp}"
     )
     
@@ -2032,12 +778,12 @@ def run_jepa(environments=["meeting_room", "empty_room", "classroom"], num_epoch
         num_epochs=num_epochs,
         resume_from=resume_from,
         checkpoint_dir=checkpoint_dir,
-        checkpoint_interval=50  
+        checkpoint_interval=50
     )
-    
+
     model_filename = f"jepa_ssl_final_{'+'.join(environments)}_{timestamp}.pth"
     model_path = os.path.join(checkpoint_dir, model_filename)
-    
+
     torch.save({
         'model_state_dict': best_state_dict,
         'config': preset,

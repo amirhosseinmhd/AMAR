@@ -1,3 +1,4 @@
+import math
 from torch import nn
 import torch
 from model.modules.elements import DepthwiseSeparableConv, DilatedConvBlock, Dilated_Blocks
@@ -60,7 +61,7 @@ from preset import preset
 #         return x.permute(0, 2, 1)
 
 class PCAFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10, pca_components=None):
+    def __init__(self, input_channels=270, output_channels=16, pca_components=None):
         super(PCAFeatureExtractor, self).__init__()
 
         self.register_buffer('pca_components', pca_components)
@@ -155,7 +156,27 @@ class PCAFeatureExtractor(nn.Module):
 
         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
-"""
+class FixedPositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(FixedPositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, indices=None):
+        """
+        Args:
+            indices: Tensor of shape (batch_size, seq_len) containing position indices
+        Returns:
+            Positional embeddings of shape (batch_size, seq_len, d_model)
+        """
+        if indices is None:
+            raise ValueError('indices must not be None')
+        return self.pe[0, indices, :]
 
 
 # class CNNFeatureExtractor(nn.Module):
@@ -254,7 +275,6 @@ class PCAFeatureExtractor(nn.Module):
 #         # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
 #         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
-"""
 
 
 class Predictor(nn.Module):
@@ -262,7 +282,7 @@ class Predictor(nn.Module):
         super().__init__()
         self.encoder_d_model = preset["nn"]["d_embedding"]
         self.predictor_d_model = preset["jepa"]["predictor_d_model"]
-        self.max_total_tokens_in_view = preset["jepa"]["num_segments_total_view"] * preset["cnn_embedding_time_dim"]
+        self.max_total_tokens_in_view = preset["jepa"]["num_segments_total_view"]
 
         # Learnable shared mask token
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.predictor_d_model))
@@ -430,7 +450,7 @@ class Transformer_Encoder(torch.nn.Module):
 
         self.d_model = d_model
 
-        self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
+        self.pos_encoder = FixedPositionalEncoding(d_model, max_total_tokens)
 
         # Custom transformer encoder layers
         self.layer_embedding_encoder = torch.nn.ModuleList([
@@ -690,8 +710,10 @@ class TransformerDecoderLayer(nn.Module):
             self.with_pos_embed(tgt, query_pos),  # query
             self.with_pos_embed(memory, memory_pos),  # key
             memory,  # value
-            key_padding_mask=key_padding_mask  # keep this as keyword
-        )
+            key_padding_mask=key_padding_mask,
+            need_weights=True,
+            average_attn_weights=False)
+
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
         
