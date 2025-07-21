@@ -48,7 +48,7 @@ def master_splitter(preset, var_task, var_model, var_users):
             pass
 
         X_train, X_test, y_train, y_test = train_test_split(X, y,
-                                                            test_size=0.01,
+                                                            test_size=0.2,
                                                             shuffle=True,
                                                             random_state=103)
         # np.random.randint()
