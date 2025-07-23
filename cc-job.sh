@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=40:30:0
+#SBATCH --time=40:40:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
@@ -34,7 +34,7 @@ cd $SLURM_TMPDIR/$CODE_DIR
 
 module purge
 module load python/3.11.5 scipy-stack
-source ~/py311_g/bin/activate
+source ~/py311/bin/activate
 
 echo "Starting job at $(date)"
 echo "Working directory: $(pwd)"
