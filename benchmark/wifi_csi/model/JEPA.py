@@ -164,6 +164,14 @@ class JEPA(nn.Module):
         self.last_weight_reset = 0
         self.predictor = Predictor(preset)
         self.predictor.set_shared_pos_encoder(self.online_transformer_encoder.pos_encoder)
+        
+        # Add projector for VICReg
+        self.vicreg_projector = nn.Sequential(
+            nn.Linear(preset["nn"]["d_embedding"], preset["nn"]["d_embedding"] * 2),
+            nn.ReLU(),
+            nn.Linear(preset["nn"]["d_embedding"] * 2, preset["nn"]["d_embedding"])
+        )
+
     @torch.no_grad()
     def extract_representations(self, x_raw_input):
         """
@@ -636,11 +644,12 @@ def train_jepa(jepa_model, dataloader_train, dataloader_test, optimizer, device,
             actual_targets = actual_targets_for_loss.reshape(b * num_blocks, tokens_per_block, d)
             
             # Calculate combined loss (Invariance as prediction loss + VICReg regularization)
-            total_loss_val, prediction_loss_val, std_loss_val, cov_loss_val = combined_loss_fn(
+            total_loss_val, prediction_loss_val, total_loss_vicreg_val, std_loss_val, cov_loss_val = combined_loss_fn(
                 predictions=predictions,
                 actual_targets=actual_targets,
                 z_context_online=z_context_online,
-                context_padding_mask=sampling_info["context_mask"]
+                context_padding_mask=sampling_info["context_mask"],
+                projector=jepa_model.vicreg_projector
             )
             
             loss = total_loss_val
@@ -658,7 +667,7 @@ def train_jepa(jepa_model, dataloader_train, dataloader_test, optimizer, device,
             total_prediction_loss += prediction_loss_val.item()
             total_vicreg_std_loss += std_loss_val.item()
             total_vicreg_cov_loss += cov_loss_val.item()
-            total_vicreg_loss += (std_loss_val.item() * combined_loss_fn.vicreg_loss.std_coeff + cov_loss_val.item() * combined_loss_fn.vicreg_loss.cov_coeff)
+            total_vicreg_loss += total_loss_vicreg_val.item()
             num_batches += 1
         
         # Removed the epoch-level EMA update since we now update per iteration
@@ -857,7 +866,12 @@ def run_JEPA(data_train_x,
                                  optimizer=optimizer, device=device,
                                  num_epochs=num_epochs, resume_from=resume_from,
                                  checkpoint_dir=checkpoint_dir,
-                                 checkpoint_interval=50)
+                                 checkpoint_interval=50,
+                                 prediction_coeff=preset["jepa"]["loss"]["prediction_coef"],
+                                 vicreg_coeff=preset["jepa"]["loss"]["vicreg_coef"],
+                                 vicreg_std_coeff=preset["jepa"]["loss"]["vicreg_std_coef"],
+                                 vicreg_cov_coeff=preset["jepa"]["loss"]["vicreg_cov_coef"]
+                                 )
 
     model_filename = f"jepa_ssl_final_{'+'.join(environments)}_{timestamp}.pth"
     model_path = os.path.join(checkpoint_dir, model_filename)

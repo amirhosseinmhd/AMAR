@@ -3,88 +3,70 @@ import torch
 import torch.nn.functional as F
 
 class VICRegLoss(nn.Module):
-    """
-    VICReg Loss implementation for C-JEPA following the exact pseudocode:
-    - sim_loss: between context and target embeddings
-    - std_loss: applied only to context embeddings
-    - cov_loss: applied only to context embeddings
-    """
-    
-    def __init__(self, 
-                 std_coeff=25.0,
-                 cov_coeff=1.0,
-                 gamma=1.0,
-                 eps=1e-4):
-        """
-        Args:
-            sim_coeff: Coefficient for similarity (invariance) loss
-            std_coeff: Coefficient for variance loss  
-            cov_coeff: Coefficient for covariance loss
-            gamma: Target standard deviation for variance regularization
-            eps: Small value for numerical stability
-        """
+    def __init__(self, sim_coeff=25.0, std_coeff=25.0, cov_coeff=1.0, gamma=1.0, eps=1e-4):
         super().__init__()
+        self.sim_coeff = sim_coeff
         self.std_coeff = std_coeff
         self.cov_coeff = cov_coeff
         self.gamma = gamma
         self.eps = eps
 
-    
-    def variance_loss(self, z):
+    def forward(self, block_embeddings):
         """
-        Variance loss: Ensures representation variance doesn't collapse
+        Apply VICReg to block embeddings treating each block as different view
         Args:
-            z: Tensor of shape (batch_size, feature_dim)
+            block_embeddings: (batch_size, num_blocks, feature_dim)
         """
-        batch_size, feature_dim = z.shape
-        std_z = torch.sqrt(z.var(dim=0) + self.eps)  # Standard deviation along batch dimension
-        std_loss = torch.mean(F.relu(self.gamma - std_z))  # Hinge loss
-        return std_loss
-    
-    def covariance_loss(self, z):
-        """
-        Covariance loss: Decorrelates features by minimizing off-diagonal covariance
-        Args:
-            z: Tensor of shape (batch_size, feature_dim)
-        """
-        batch_size, feature_dim = z.shape
-        z_centered = z - z.mean(dim=0)  # Center the features
+        batch_size, num_blocks, feature_dim = block_embeddings.shape
         
-        # Compute covariance matrix
+        total_loss = 0.0
+        num_pairs = 0
+        std_loss_val = 0.0
+        cov_loss_val = 0.0
+        # Iterate over all pairs of blocks (i, j) where i != j
+        for i in range(num_blocks):
+            for j in range(num_blocks):
+                if i != j:
+                    block_i = block_embeddings[:, i, :]  # (batch_size, feature_dim)
+                    block_j = block_embeddings[:, j, :]  # (batch_size, feature_dim)
+                    
+                    # Invariance (similarity) loss between blocks i and j
+                    sim_loss = F.mse_loss(block_i, block_j)
+                    
+                    # Variance loss for both blocks
+                    std_i = torch.sqrt(block_i.var(dim=0) + self.eps)
+                    std_j = torch.sqrt(block_j.var(dim=0) + self.eps)
+                    std_loss = (torch.mean(F.relu(self.gamma - std_i)) + 
+                               torch.mean(F.relu(self.gamma - std_j))) / 2
+                    
+                    # Covariance loss for both blocks
+                    cov_loss = (self._covariance_loss(block_i) + 
+                               self._covariance_loss(block_j)) / 2
+                    
+                    # Combine losses for this pair
+                    pair_loss = (self.sim_coeff * sim_loss + 
+                                self.std_coeff * std_loss + 
+                                self.cov_coeff * cov_loss)
+                    std_loss_val += std_loss
+                    cov_loss_val += cov_loss
+                    total_loss += pair_loss
+                    num_pairs += 1
+        
+        # Average over all pairs
+        if num_pairs > 0:
+            total_loss = total_loss / num_pairs
+            std_loss = std_loss_val / num_pairs
+            cov_loss = cov_loss_val / num_pairs
+            
+        return total_loss, std_loss, cov_loss
+    
+    def _covariance_loss(self, z):
+        """Compute covariance loss for decorrelation"""
+        batch_size, feature_dim = z.shape
+        z_centered = z - z.mean(dim=0)
         cov_matrix = torch.mm(z_centered.T, z_centered) / (batch_size - 1)
-        
-        # Zero out diagonal and sum squared off-diagonal elements
         off_diag_mask = ~torch.eye(feature_dim, dtype=torch.bool, device=z.device)
-        cov_loss = (cov_matrix[off_diag_mask] ** 2).sum() / feature_dim
-        
-        return cov_loss
-    
-    def forward(self, z_context_pooled):
-        """
-        Compute VICReg regularization terms (variance and covariance only):
-        - std_loss: applied to context embeddings  
-        - cov_loss: applied to context embeddings
-        
-        Note: Invariance/similarity loss is handled separately as the main prediction loss
-        
-        Args:
-            z_context_pooled: Pooled context representations, shape (batch_size, feature_dim)
-        
-        Returns:
-            dict: Dictionary with total loss and individual components
-        """
-        # VICReg regularization terms applied only to context embeddings
-        std_loss = self.variance_loss(z_context_pooled)
-        cov_loss = self.covariance_loss(z_context_pooled)
-        
-        # Total VICReg regularization (variance + covariance only)
-        total_loss = (self.std_coeff * std_loss + self.cov_coeff * cov_loss)
-        
-        return {
-            'std_loss': std_loss,
-            'cov_loss': cov_loss,
-            'total_loss': total_loss,
-        }
+        return (cov_matrix[off_diag_mask] ** 2).sum() / feature_dim
 
 class CombinedJEPALoss(nn.Module):
     """
@@ -146,32 +128,40 @@ class CombinedJEPALoss(nn.Module):
             
         return pooled
     
-    def forward(self, predictions, actual_targets, z_context_online, context_padding_mask):
+    def forward(self, predictions, actual_targets, z_context_online, context_padding_mask, projector):
         """
         Compute combined JEPA + VICReg loss where:
         - Invariance loss is applied to predicted tokens vs actual target tokens (replaces JEPA prediction loss)
         - Variance/Covariance losses are applied to context embeddings
         
         Args:
-            predictions: Predicted target representations from predictor
-            actual_targets: Actual target representations (ground truth)
+            predictions: Predicted target representations from predictor b , num_blocks, tokens_per_block, d
+            actual_targets: Actual target representations (ground truth)  shape: b * num_blocks, tokens_per_block, d
             z_context_online: Context representations, shape (batch_size, context_len, feature_dim)
             context_padding_mask: Padding mask for context, shape (batch_size, context_len)
         
         Returns:
             dict: Dictionary with total loss and individual components
         """
-        # 1. Invariance loss: between predicted tokens and actual target tokens (this IS the prediction loss)
         batch_size, num_blocks, num_target_tokens, dim_context = predictions.shape
-        invariance_loss = F.mse_loss(predictions.view(-1, num_target_tokens, dim_context), actual_targets)
         
-        # 2. Pool context representations for variance/covariance losses
-        z_context_pooled = self.pool_representations(z_context_online, context_padding_mask)
+        # 1. JEPA prediction loss (MSE between predictions and targets)
+        predictions_flat = predictions.view(-1, num_target_tokens, dim_context)
+        jepa_loss = F.mse_loss(predictions_flat, actual_targets)
         
-        # 3. Apply VICReg variance and covariance losses to context embeddings
-        vicreg_losses = self.vicreg_loss(z_context_pooled)
+        # 2. Prepare block embeddings for VICReg
+        # Average within each block: (batch_size, num_blocks, dim)
+        block_embeddings = predictions.mean(dim=2)  # Average over tokens_per_block
         
-        # 4. Combined loss: invariance (prediction) + VICReg regularization terms
-        total_loss = (1 - self.vicreg_coeff )* invariance_loss + self.vicreg_coeff * vicreg_losses["total_loss"]
+        # Apply projector to each block embedding
+        block_embeddings_flat = block_embeddings.view(-1, dim_context)  # (batch_size * num_blocks, dim)
+        projected_flat = projector(block_embeddings_flat)  # (batch_size * num_blocks, dim)
+        projected_blocks = projected_flat.view(batch_size, num_blocks, dim_context)  # (batch_size, num_blocks, dim)
         
-        return total_loss, invariance_loss,  vicreg_losses['std_loss'], vicreg_losses['cov_loss']
+        # 3. Apply VICReg to projected block embeddings
+        vicreg_loss, std_loss, cov_loss = self.vicreg_loss(projected_blocks)
+        
+        # 4. Combine losses
+        total_loss = (1 - self.vicreg_coeff) * jepa_loss + self.vicreg_coeff * vicreg_loss
+        
+        return total_loss, jepa_loss, vicreg_loss, std_loss, cov_loss  # Return vicreg_loss twice for compatibility

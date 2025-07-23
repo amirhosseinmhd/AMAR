@@ -19,7 +19,7 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 1,
+    "repeat": 4,
     ## path of data
     "path": {
         "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
@@ -48,8 +48,8 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 1e-3,                                     # learning rate
-        "epoch": 300,                                   # number of epochs
+        "lr": 1e-4,                                     # learning rate
+        "epoch": 400,                                   # number of epochs
         "batch_size":64,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -71,34 +71,34 @@ preset = {
         "num_obj_queries": 5,
         "num_decoder_layers": 6,
         "dim_FFN": 512,
-        "token_length": 36, #74
+        "token_length": 99, #74
         "d_embedding": 80,
         "n_attention_heads": 8,
         "query_dropout_rate": 0.0
     },
     "jepa": {
-        "segment_length": 80,              # Number of timestamps in each segment.
-        "num_segments_total_view": 36,      # Total number of segments considered in a single processing view.
-        "encoder_layers": 8,                # Number of layers in the Transformer Encoder.
-        "ema_decay": 0.999,                 # Decay rate for the Exponential Moving Average of target encoder weights.
+        "segment_length": 30,              # Number of timestamps in each segment.
+        "num_segments_total_view": 99,      # Total number of segments considered in a single processing view.
+        "encoder_layers": 6,                # Number of layers in the Transformer Encoder.
+        "ema_decay": 0.998,                 # Decay rate for the Exponential Moving Average of target encoder weights.
         "num_target_blocks":4,             # Number of target blocks to sample and predict.
-        "target_block_size_segments": 8,    # Number of contiguous segments forming a single target block.
+        "target_block_size_segments": 20,    # Number of contiguous segments forming a single target block.
 
         # --- Predictor Specific Configurations ---
         # The "narrow" dimension of the predictor's internal Transformer.
         "predictor_d_model": 52,
         "predictor_attention_heads": 4,       # Number of attention heads in the Predictor's Transformer.
-        "predictor_layers": 4,                # Number of layers in the Predictor's Transformer.
+        "predictor_layers": 3,                # Number of layers in the Predictor's Transformer.
         "sampling_weight_decay_factor": 0.9,  # Factor to reduce weights after sampling
-        "sampling_weight_reset_interval": 1000,  # Reset weights every N times
+        "sampling_weight_reset_interval": 100,  # Reset weights every N times
         "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
-        "loss":{
-            "prediction_coef": 1,
-            "vicreg_coeff": 0,
-            "vicreg_std_coeff": 25.0,
-            "vicreg_cov_coeff": 1.0
-            }
-
+        "loss": {
+            "prediction_coef": 1.0,  # Keep JEPA prediction loss at full strength
+            "vicreg_coef": 0.001,  # Much smaller - VICReg is regularization, not main loss
+            "vicreg_sim_coef": 25.0,  # NEW: Similarity between different blocks
+            "vicreg_std_coef": 25.0,  # Variance regularization
+            "vicreg_cov_coef": 1.0  # Covariance regularization
+        }
         },
 
     ## encoding of activities and locations
@@ -135,7 +135,7 @@ preset = {
     # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_meeting_room_classroom_DETR.pth",
     "pretrained_path": None,
     "transfer_scenario": "feature_encoder",  # One of ["full", "feature_extractor", "feature_encoder"]
-    "save_model": False,  # Whether to save model components
+    "save_model": True,  # Whether to save model components
     "saving_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/"
 }
 

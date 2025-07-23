@@ -173,8 +173,8 @@ def run():
     print(result)
     #
     ## save results
-    var_file = open(preset["path"]["save"], 'w')
-    json.dump(result, var_file, indent=4, cls=NumpyEncoder)
+    # var_file = open(preset["path"]["save"], 'w')
+    # json.dump(result, var_file, indent=4, cls=NumpyEncoder)
 
 #
 ##
