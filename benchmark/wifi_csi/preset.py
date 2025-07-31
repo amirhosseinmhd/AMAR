@@ -10,7 +10,7 @@ preset = {
     ## define model
     "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
     "finetune_strategy": "finetune_encoder_small_lr",
-    "wandb_name": "DETR",
+    "wandb_name": "00",
     "model": "JEPA",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR, JEPA_HYB, "JEPA"
@@ -94,7 +94,7 @@ preset = {
         "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
         "loss": {
             "prediction_coef": 1.0,  # Keep JEPA prediction loss at full strength
-            "vicreg_coef": 0.001,  # Much smaller - VICReg is regularization, not main loss
+            "vicreg_coef": 0.1,  # Much smaller - VICReg is regularization, not main loss
             "vicreg_sim_coef": 25.0,  # NEW: Similarity between different blocks
             "vicreg_std_coef": 25.0,  # Variance regularization
             "vicreg_cov_coef": 1.0  # Covariance regularization
@@ -132,9 +132,9 @@ preset = {
             "e":    [0, 0, 0, 0, 1],
         },
     },
-    # "pretrained_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/model_0/PT_meeting_room_classroom_DETR.pth",
-    "pretrained_path": None,
-    "transfer_scenario": "feature_encoder",  # One of ["full", "feature_extractor", "feature_encoder"]
+    # "pretrained_path": None,
+    "pretrained_path": "/saved_models/jepa_ssl_empty_room+classroom+meeting_room_20250721_124829/jepa_ssl_final_empty_room+classroom+meeting_room_20250721_124829.pth",
+    "transfer_scenario": "freeze_encoder",  # One of ["full", "feature_extractor", "feature_encoder"]
     "save_model": True,  # Whether to save model components
     "saving_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/"
 }
