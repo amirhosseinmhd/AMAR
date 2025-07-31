@@ -839,10 +839,10 @@ def run_JEPA(data_train_x,
     dataloader_test = DataLoader(jepa_dataset_test, batch_size=preset["nn"]["batch_size"], shuffle=True, pin_memory=True)
 
     jepa_model = JEPA().to(device)
-    jepa_model.online_cnn_feature_extractor = torch.compile(jepa_model.online_cnn_feature_extractor,
-                                                                mode="default")
-    jepa_model.target_cnn_feature_extractor = torch.compile(jepa_model.target_cnn_feature_extractor,
-                                                                mode="default")
+    # jepa_model.online_cnn_feature_extractor = torch.compile(jepa_model.online_cnn_feature_extractor,
+    #                                                             mode="default")
+    # jepa_model.target_cnn_feature_extractor = torch.compile(jepa_model.target_cnn_feature_extractor,
+    #                                                             mode="default")
         # pca_components=pca_components).to(device)
     # jepa_model.max_iters = num_epochs * len(dataloader)  # Set max iterations for EMA updates
 
