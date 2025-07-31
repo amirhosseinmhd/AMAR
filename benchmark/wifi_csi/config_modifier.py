@@ -57,6 +57,8 @@ def update_config_from_env(config):
         config['data']['environment'] = environments
     if 'SSL_COEF' in os.environ:
         config['nn']["loss"]['SSL_coeff'] = float(os.environ['SSL_COEF'])
+    if 'VICREG_COEF' in os.environ:
+        config['jepa']["loss"]['vicreg_coef'] = float(os.environ['VICREG_COEF'])
     return config
 
 
