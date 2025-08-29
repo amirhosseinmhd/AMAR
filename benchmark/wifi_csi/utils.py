@@ -549,10 +549,10 @@ def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
     y_true_act = y_true_act.sum(axis=1)
 
     # Metrics for activity prediction
-    act_metrics = calculate_scores(y_true_act, last_act_pred, batch_size)
+    act_metrics = calculate_scores(y_true_act, last_act_pred)
 
     # Metrics for location prediction
-    loc_metrics = calculate_scores(y_true_loc, last_loc_pred, batch_size)
+    loc_metrics = calculate_scores(y_true_loc, last_loc_pred)
 
     return act_metrics, loc_metrics
 
