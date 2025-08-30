@@ -86,7 +86,7 @@ class DETR_MultiUser(nn.Module):
         var_embedding = extracted_features#.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
 
 
-        memory = self.encoder(var_embedding)
+        memory = self.encoder(extracted_features)
 
         outputs_class = self.decoder(memory)
 
@@ -213,8 +213,8 @@ def run_that_detr(data_train_x,
                                     # pca_embeddings=pca_components
                                     ).to(device)
 
-        model_detr.feature_extractor = torch.compile(model_detr.feature_extractor, mode="default")
-        model_detr.decoder = torch.compile(model_detr.decoder, mode="default")        # wandb.watch(
+        # model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
+        # model_detr.decoder = torch.compile(model_detr.decoder)        # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
         #     log_freq=50,  # Frequency of logging

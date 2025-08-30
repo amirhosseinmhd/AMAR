@@ -66,7 +66,7 @@ def train(model: Module,
     def apply_augmentation(x_batch):
         noise = torch.randn_like(x_batch) * 0.1
         x_batch = x_batch + noise
-        scale = torch.rand(x_batch.size(0), 1, device=x_batch.device) * 0.2 + 0.9
+        scale = torch.rand(x_batch.size(0), 1, device=x_batch.device) * 0.2 + 1
         x_batch = x_batch * scale.unsqueeze(-1)
         mask = torch.bernoulli(torch.ones_like(x_batch) * 0.96)
         x_batch = x_batch * mask
