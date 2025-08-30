@@ -56,37 +56,15 @@ class DETR_MultiUser(nn.Module):
 
         segment_length = preset["jepa"]["segment_length"]  # Length of each segment
         input_channels = x.shape[2]
-
-        # Reshape x for batch processing of all segments by the feature_extractor
-        # Randomly select start position only during training
-
-        t_init = np.random.randint(0, segment_length)  # Random starting point when training
-
-        t_final = t_init + num_segments * segment_length  # Calculate the end point
-        
-        # Ensure we don't go out of bounds
-        if t_final > x.shape[1]:
-            raise ValueError(f"t_final {t_final} exceeds input length {x.shape[1]}. Adjust segment_length or num_segments.")
-            # t_init = max(0, x.shape[1] - num_segments * segment_length)
-            # t_final = t_init + num_segments * segment_length
-            
-        x = x[:, t_init:t_final, :]  # Extract the segments
-
-
-        # We reshape it to (batch_size * num_segments, segment_length, input_channels)
-        # e.g., (batch_size * 15, 200, input_channels)
-        # x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
-        x_batched = x.reshape(batch_size * num_segments, segment_length, input_channels)
-
-        extracted_features = self.feature_extractor(x_batched)
+        extracted_features = self.feature_extractor(x)
 
 
         T_out_segment = extracted_features.shape[1]
         output_features_dim = extracted_features.shape[2]
-        var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
+        # var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
 
 
-        memory = self.encoder(var_embedding)
+        memory = self.encoder(extracted_features)
 
         outputs_class = self.decoder(memory)
 
@@ -213,8 +191,8 @@ def run_that_detr(data_train_x,
                                     # pca_embeddings=pca_components
                                     ).to(device)
 
-        model_detr.feature_extractor = torch.compile(model_detr.feature_extractor, mode="default")
-        model_detr.decoder = torch.compile(model_detr.decoder, mode="default")        # wandb.watch(
+        # model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
+        # model_detr.decoder = torch.compile(model_detr.decoder)        # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
         #     log_freq=50,  # Frequency of logging
