@@ -52,7 +52,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 5e-4,                                     # learning rate
-        "epoch": 700,                                   # number of epochs
+        "epoch": 400,                                   # number of epochs
         "batch_size":64,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -75,10 +75,13 @@ preset = {
         "num_decoder_layers": 6,
         "dim_FFN": 512,
         "token_length": 62, #74
-        "d_embedding": 64,
-        "n_attention_heads": 8,
-        "query_dropout_rate": 0.0
-    },
+        "d_embedding": 48,
+        "n_attention_heads": 6,
+        "query_dropout_rate": 0.0,
+        "commitment_cost": 0.25,
+        "num_codes": 64
+
+},
     "jepa": {
         "segment_length": 48,              # Number of timestamps in each segment.
         "num_segments_total_view": 1,      # Total number of segments considered in a single processing view.

@@ -878,9 +878,10 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
         num_layers = len(decoder_layers)
         # Now iterate through layers using the same sample
         for layer_idx, layer in enumerate(decoder_layers):
-            attn_weights = layer.cross_attn_weights.detach().clone()
+            attn_weights = layer.cross_attn_weights
             if attn_weights is None:
                 continue
+            attn_weights = attn_weights.detach().clone()
             if layer_idx != num_layers - 1:
                 continue
             # Assuming attn_weights shape is now [batch_size, num_heads, target_seq_len, source_seq_len]

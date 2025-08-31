@@ -144,7 +144,7 @@ def run_that_detrVQ(data_train_x,
     # Flatten embeddings for KMeans
     initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
     
-    num_embeddings = 1024  # Or get from preset
+    num_embeddings = preset["nn"]["num_codes"]# Or get from preset
     kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=10).fit(initial_embeddings_flat)
     codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
     print("K-means initialization complete.")
@@ -172,6 +172,7 @@ def run_that_detrVQ(data_train_x,
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    num_embeddings=preset["nn"]["num_codes"],
                                     pca_embeddings=pca_components.to(torch.device("cpu")),
                                     codebook_initial_embeddings=codebook_initial_embeddings.to(torch.device("cpu"))),var_x_shape, as_strings=False)
 
@@ -191,7 +192,7 @@ def run_that_detrVQ(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="test",
+            project="VQ",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -207,8 +208,10 @@ def run_that_detrVQ(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
-                                    #pca_embeddings=pca_components,
+                                     num_embeddings=preset["nn"]["num_codes"],
+                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                     commitment_cost=preset["nn"]["commitment_cost"],
+                                         # pca_embeddings=pca_components,
                                     codebook_initial_embeddings=codebook_initial_embeddings).to(device)
 
         model_detrVQ.feature_extractor = torch.compile(model_detrVQ.feature_extractor)
