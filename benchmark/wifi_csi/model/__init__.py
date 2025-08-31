@@ -25,6 +25,7 @@ from .multi_senseX import run_multi_senseX
 from .multi_user import run_multi_user
 from .JEPA_Supervised import run_JEPA_hyb
 from .JEPA import run_JEPA
+from .detr_vq import run_that_detrVQ
 
 #
 ##
@@ -48,4 +49,5 @@ __all__ = ["run_strf",
            "run_multi_senseX",
            "run_multi_user",
            "run_JEPA_hyb",
-           "run_JEPA"]
+           "run_JEPA",
+           "run_that_detrVQ"]

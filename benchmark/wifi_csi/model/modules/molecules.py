@@ -3,6 +3,7 @@ from torch import nn
 import torch
 from model.modules.elements import DepthwiseSeparableConv, DilatedConvBlock, Dilated_Blocks
 from preset import preset
+import torch.nn.functional as F
 
 # class PCAFeatureExtractor(nn.Module):
 #     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=1, pca_components=None):
@@ -60,6 +61,54 @@ from preset import preset
 #         # Output shape: (batch, 1, output_channels)
 #         return x.permute(0, 2, 1)
 
+class VectorQuantizer(nn.Module):
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost, initial_embeddings=None):
+        super(VectorQuantizer, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.commitment_cost = commitment_cost
+        
+        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
+        if initial_embeddings is not None:
+            self.embedding.weight.data.copy_(initial_embeddings)
+        else:
+            self.embedding.weight.data.uniform_(-1/self.num_embeddings, 1/self.num_embeddings)
+
+    def forward(self, inputs):
+        # convert inputs from B, T, C -> B, T, C
+        inputs_contiguous = inputs.contiguous()
+        input_shape = inputs_contiguous.shape
+        
+        # Flatten input
+        flat_input = inputs_contiguous.view(-1, self.embedding_dim)
+        
+        # Calculate distances
+        distances = (torch.sum(flat_input**2, dim=1, keepdim=True) 
+                    + torch.sum(self.embedding.weight**2, dim=1)
+                    - 2 * torch.matmul(flat_input, self.embedding.weight.t()))
+            
+        # Encoding
+        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
+        encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device)
+        encodings.scatter_(1, encoding_indices, 1)
+        
+        # Quantize and unflatten
+        quantized = torch.matmul(encodings, self.embedding.weight).view(input_shape)
+        
+        # Straight-through estimator
+        quantized_st = inputs + (quantized - inputs).detach()
+        
+        return quantized_st, quantized, encoding_indices.view(input_shape[0], input_shape[1])
+
+    def compute_loss(self, continuous_embeddings, quantized_embeddings):
+        # Commitment loss
+        commitment_loss = F.mse_loss(continuous_embeddings.detach(), quantized_embeddings)
+        
+        # Codebook loss
+        codebook_loss = F.mse_loss(continuous_embeddings, quantized_embeddings.detach())
+        
+        return codebook_loss + self.commitment_cost * commitment_loss
+        
 class PCAFeatureExtractor(nn.Module):
     def __init__(self, input_channels=270, output_channels=16, pca_components=None):
         super(PCAFeatureExtractor, self).__init__()
@@ -68,7 +117,7 @@ class PCAFeatureExtractor(nn.Module):
 
         pca_output_dim = 64
         c_initial = 64  # Channels after initial convolution
-        c_hierarchical_out = 100  # Channels after hierarchical dilated blocks
+        c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
 
         # Alternative to PCA: learnable convolution for dimensionality reduction
         self.low_pass_conv_pca_replace = nn.Conv1d(input_channels, pca_output_dim, kernel_size=3, padding="same")
@@ -213,102 +262,6 @@ class FixedPositionalEncoding(nn.Module):
             raise ValueError('indices must not be None')
         return self.pe[0, indices, :]
 
-
-# class CNNFeatureExtractor(nn.Module):
-#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=10): # Default embedding_time_dim set to 10
-#         super(CNNFeatureExtractor, self).__init__()
-#         self.embedding_time_dim = embedding_time_dim
-#
-#         c_initial = 128  # Channels after initial convolution
-#         c_hierarchical_out = 64  # Channels after hierarchical dilated blocks
-#
-#         # 1. Initial Processing & First Temporal Reduction (T: 200 -> 100)
-#         self.initial_conv = nn.Conv1d(input_channels, c_initial, kernel_size=1, padding=0)
-#         self.bn_initial = nn.BatchNorm1d(c_initial)
-#         self.relu_initial = nn.ReLU()
-#
-#         self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2) # T: 200 -> 100
-#         self.bn_ds1 = nn.BatchNorm1d(c_initial)
-#         self.relu_ds1 = nn.ReLU()
-#
-#         # 2. Hierarchical Dilated Convolutions (on T=100)
-#         # Input: (B, c_initial, 100)
-#         self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-#         self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=2)
-#         # Reduce channels in the last hierarchical block
-#         # self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
-#         # Output: (B, c_hierarchical_out, 100)
-#
-#         # 3. Second Temporal Reduction (T: 100 -> 50)
-#         # Input: (B, c_hierarchical_out, 100)
-#         self.ds_conv2 = DepthwiseSeparableConv(c_hierarchical_out, c_hierarchical_out, kernel_size=5, padding=2, stride=2) # T: 100 -> 50
-#         self.bn_ds2 = nn.BatchNorm1d(c_hierarchical_out)
-#         self.relu_ds2 = nn.ReLU()
-#         # Output: (B, c_hierarchical_out, 50)
-#
-#         # 4. Channel Adjustment to output_channels (T: 50)
-#         # Input: (B, c_hierarchical_out, 50)
-#         self.channel_adjust_before_parallel = nn.Conv1d(c_hierarchical_out, output_channels, kernel_size=1)
-#         self.bn_adjust = nn.BatchNorm1d(output_channels)
-#         self.relu_adjust = nn.ReLU()
-#         # Output: (B, output_channels, 50)
-#
-#         # 5. Parallel Dilated Convolutions (on T=50)
-#         # Input: (B, output_channels, 50)
-#         self.parallel_dilated_blocks = Dilated_Blocks(output_channels) # Assumes Dilated_Blocks handles its internal ReLUs
-#         self.bn_parallel = nn.BatchNorm1d(output_channels)
-#         self.relu_parallel = nn.ReLU()
-#         # Output: (B, output_channels, 50)
-#
-#         # 6. Final Temporal Reduction (from T=50 to embedding_time_dim)
-#         # Input: (B, output_channels, 50)
-#
-#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels,
-#                                               kernel_size=5, stride=5, padding=2)
-#         self.bn_final = nn.BatchNorm1d(output_channels)
-#         self.relu_final = nn.ReLU()
-#         # Output: (B, output_channels, embedding_time_dim)
-#
-#     def forward(self, x):
-#         # Input x shape: (batch, time, channels_in) e.g. (B, 200, 270)
-#         x = x.permute(0, 2, 1)  # (batch, channels_in, time) e.g. (B, 270, 200)
-#
-#         # 1. Initial Processing & First Temporal Reduction
-#         x = self.initial_conv(x) #d from 270 ->128
-#         x = self.bn_initial(x)
-#         x = self.relu_initial(x)
-#
-#         x = self.ds_conv1(x) # T: 200 -> 100
-#         x = self.bn_ds1(x)
-#         x = self.relu_ds1(x)
-#
-#         # 2. Hierarchical Dilated Convolutions
-#         x = self.hierarchical_dilated_1(x)
-#         x = self.hierarchical_dilated_2(x)
-#         # x = self.hierarchical_dilated_3(x) # Channels: c_initial -> c_hierarchical_out =64
-#
-#         # 3. Second Temporal Reduction
-#         x = self.ds_conv2(x) # T: 100 -> 50
-#         x = self.bn_ds2(x)
-#         x = self.relu_ds2(x)
-#
-#         # 4. Channel Adjustment
-#         x = self.channel_adjust_before_parallel(x) # Channels: c_hierarchical_out -> output_channels
-#         x = self.bn_adjust(x)
-#         x = self.relu_adjust(x)
-#
-#         # 5. Parallel Dilated Convolutions
-#         x = self.parallel_dilated_blocks(x)
-#         x = self.bn_parallel(x)
-#         x = self.relu_parallel(x)
-#
-#         # 6. Final Temporal Reduction
-#         x = self.final_reduction_conv(x) # T: 50 -> embedding_time_dim (approx)
-#         x = self.bn_final(x)
-#         x = self.relu_final(x)
-#
-#         # print(f"Final shape after CNNFeatureExtractor: {x.shape}")
-#         return x.permute(0, 2, 1)  # (batch, embedding_time_dim, output_channels)
 
 
 

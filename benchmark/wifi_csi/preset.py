@@ -11,7 +11,7 @@ preset = {
     "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
     "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "00",
-    "model": "JEPA",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "DETR_VQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR, JEPA_HYB, "JEPA"
     # "model": "MLP",
@@ -19,15 +19,18 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 4,
+    "repeat": 1,
     ## path of data
     "path": {
+
+        "data_x": "/home/amirmhd/Documents/multi_modal_CSI/dataset/wifi_csi/amp",
+        "data_y": "/home/amirmhd/Documents/multi_modal_CSI/dataset/annotation.csv",
         # "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",  # path of annotation file
         # "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",  # path of annotation file
-        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
-        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
+        # "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
+        # "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -35,7 +38,7 @@ preset = {
     "data": {
         "num_users": ["0","1", "2", "3", "4", "5"] ,   # select number(s) of users, (e.g., ["0", "1"], ["2", "3", "4", "5"])
         "wifi_band": ["5"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
-        "environment": ["empty_room", "classroom","meeting_room"],# $, "classroom","empty_room"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
+        "environment": ["classroom"],# $, "classroom","empty_room"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
         "length": 3000,                                 # default length of CSI
     },
     "data_band2": {
@@ -48,8 +51,8 @@ preset = {
     #
     ## hyperparameters of models
     "nn": {
-        "lr": 4e-3,                                     # learning rate
-        "epoch": 400,                                   # number of epochs
+        "lr": 5e-4,                                     # learning rate
+        "epoch": 700,                                   # number of epochs
         "batch_size":64,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -63,22 +66,22 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.0,  # label smoothing factor
+            "label_smoothing": 0.05,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "cross_attention_temp": 1,
-        "weight_decay": 1e-5,
+        "weight_decay": 1e-4,
         "num_obj_queries": 5,
         "num_decoder_layers": 6,
         "dim_FFN": 512,
-        "token_length": 99, #74
-        "d_embedding": 80,
+        "token_length": 62, #74
+        "d_embedding": 64,
         "n_attention_heads": 8,
         "query_dropout_rate": 0.0
     },
     "jepa": {
-        "segment_length": 30,              # Number of timestamps in each segment.
-        "num_segments_total_view": 99,      # Total number of segments considered in a single processing view.
+        "segment_length": 48,              # Number of timestamps in each segment.
+        "num_segments_total_view": 1,      # Total number of segments considered in a single processing view.
         "encoder_layers": 6,                # Number of layers in the Transformer Encoder.
         "ema_decay": 0.998,                 # Decay rate for the Exponential Moving Average of target encoder weights.
         "num_target_blocks":4,             # Number of target blocks to sample and predict.
@@ -132,10 +135,10 @@ preset = {
             "e":    [0, 0, 0, 0, 1],
         },
     },
-    # "pretrained_path": None,
-    "pretrained_path": "/saved_models/jepa_ssl_empty_room+classroom+meeting_room_20250721_124829/jepa_ssl_final_empty_room+classroom+meeting_room_20250721_124829.pth",
+    "pretrained_path": None,
+    # "pretrained_path": "/saved_models/jepa_ssl_empty_room+classroom+meeting_room_20250721_124829/jepa_ssl_final_empty_room+classroom+meeting_room_20250721_124829.pth",
     "transfer_scenario": "freeze_encoder",  # One of ["full", "feature_extractor", "feature_encoder"]
-    "save_model": True,  # Whether to save model components
+    "save_model": False,  # Whether to save model components
     "saving_path": "/home/amirmhd/Documents/multi_modal_CSI/benchmark/wifi_csi/results/"
 }
 
