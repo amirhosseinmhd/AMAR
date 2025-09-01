@@ -11,9 +11,9 @@ preset = {
     "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
     "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "00",
-    "model": "DETR_VQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "DETR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
-                                                            #JOINT_DETR, JEPA_HYB, "JEPA"
+                                                            #JOINT_DETR, JEPA_HYB, "JEPA", "DETR_VQ", "DETR_RVQ"
     # "model": "MLP",
     ## define task
     "task": "activity",                                 # "identity", "activity", "location"
@@ -76,11 +76,12 @@ preset = {
         "dim_FFN": 512,
         "token_length": 62, #74
         "d_embedding": 48,
-        "n_layers_encoder":8,
+        "n_layers_encoder":4,
         "n_attention_heads": 6,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.25,
         "num_codes": 64,
+        "num_rvq_layers": 3,  # Number of RVQ layers (V+1 in the formula)
         "PCA": False
 },
     "jepa": {

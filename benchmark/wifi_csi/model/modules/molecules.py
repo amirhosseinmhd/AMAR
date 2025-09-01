@@ -54,6 +54,108 @@ class VectorQuantizer(nn.Module):
         codebook_loss = F.mse_loss(continuous_embeddings, quantized_embeddings.detach())
         
         return codebook_loss + self.commitment_cost * commitment_loss
+
+
+class ResidualVectorQuantizer(nn.Module):
+    """
+    Residual Vector Quantization (RVQ) implementation.
+    Uses multiple quantization layers to quantize residuals progressively.
+    """
+    def __init__(self, num_layers, num_embeddings, embedding_dim, commitment_cost, 
+                 initial_embeddings_first_layer=None):
+        super(ResidualVectorQuantizer, self).__init__()
+        self.num_layers = num_layers
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.commitment_cost = commitment_cost
+        
+        # Create multiple VQ layers
+        self.vq_layers = nn.ModuleList()
+        
+        # First layer with optional K-means initialization
+        first_vq = VectorQuantizer(
+            num_embeddings=num_embeddings,
+            embedding_dim=embedding_dim,
+            commitment_cost=commitment_cost,
+            initial_embeddings=initial_embeddings_first_layer
+        )
+        self.vq_layers.append(first_vq)
+        
+        # Additional layers with random initialization
+        for _ in range(1, num_layers):
+            vq_layer = VectorQuantizer(
+                num_embeddings=num_embeddings,
+                embedding_dim=embedding_dim,
+                commitment_cost=commitment_cost,
+                initial_embeddings=None  # Random initialization for residual layers
+            )
+            self.vq_layers.append(vq_layer)
+    
+    def forward(self, inputs):
+        """
+        Args:
+            inputs: Input tensor of shape (batch_size, seq_len, embedding_dim)
+        
+        Returns:
+            quantized_st: Straight-through quantized features (sum of all layers)
+            quantized: Detached quantized features (sum of all layers)
+            all_indices: List of indices from each quantization layer
+            all_quantized_layers: List of quantized outputs from each layer
+        """
+        batch_size, seq_len, _ = inputs.shape
+        
+        # Initialize residual with input features
+        residual = inputs
+        
+        # Store outputs from each layer
+        all_quantized_st = []
+        all_quantized = []
+        all_indices = []
+        
+        # Progressive residual quantization
+        for layer_idx, vq_layer in enumerate(self.vq_layers):
+            # Quantize current residual
+            quantized_st, quantized, indices = vq_layer(residual)
+            
+            # Store layer outputs
+            all_quantized_st.append(quantized_st)
+            all_quantized.append(quantized)
+            all_indices.append(indices)
+            
+            # Update residual for next layer (subtract quantized representation)
+            if layer_idx < self.num_layers - 1:  # Don't compute residual for last layer
+                residual = residual - quantized.detach()
+        
+        # Sum all quantized representations
+        final_quantized_st = torch.stack(all_quantized_st, dim=0).sum(dim=0)
+        final_quantized = torch.stack(all_quantized, dim=0).sum(dim=0)
+        
+        return final_quantized_st, final_quantized, all_indices, all_quantized
+    
+    def compute_loss(self, inputs, all_quantized_layers):
+        """
+        Compute total VQ loss across all layers.
+        
+        Args:
+            inputs: Original input features
+            all_quantized_layers: List of quantized outputs from each layer
+        
+        Returns:
+            total_loss: Sum of losses from all quantization layers
+        """
+        total_loss = 0.0
+        residual = inputs
+        
+        for layer_idx, (vq_layer, quantized) in enumerate(zip(self.vq_layers, all_quantized_layers)):
+            # Compute loss for current layer
+            layer_loss = vq_layer.compute_loss(residual, quantized)
+            total_loss += layer_loss
+            
+            # Update residual for next layer
+            if layer_idx < self.num_layers - 1:
+                residual = residual - quantized.detach()
+        
+        return total_loss
         
 class PCAFeatureExtractor(nn.Module):
     def __init__(self, input_channels=270, output_channels=16, pca_components=None):

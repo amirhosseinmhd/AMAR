@@ -36,7 +36,7 @@ def master_splitter(preset, var_task, var_model, var_users):
 
         if var_model == "THAT_MULTI_HEAD":
             y = reduce_dataset(y)  # CHECKKKKKKKK HEREEEEEE
-        elif var_model == "THAT_ENCODER" or var_model == "DETR" or var_model== "multi_user" or var_model=="DETR_VQ" or var_model == "JEPA_HYB" or var_model == "JEPA":
+        elif var_model == "THAT_ENCODER" or var_model == "DETR" or var_model== "multi_user" or var_model=="DETR_VQ" or var_model=="DETR_RVQ" or var_model == "JEPA_HYB" or var_model == "JEPA":
             y = reduce_dataset(y, preset["nn"]["num_obj_queries"])  # CHECKKKKKKKK HEREEEEEE
         elif var_model == "THAT_COUNT_CONSTRAINED":
             y_red = reduce_dataset(y)
@@ -154,6 +154,8 @@ def run():
     elif var_model == "JEPA": run_model = run_JEPA
 
     elif var_model == "DETR_VQ": run_model = run_that_detrVQ
+
+    elif var_model == "DETR_RVQ": run_model = run_that_detrRVQ
 
     else:
         raise Exception("Not valid name for model")
