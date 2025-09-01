@@ -113,10 +113,13 @@ def run_that_detrVQ(data_train_x,
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     data_x_mean = np.mean(data_train_x, axis=1)
-    pca = PCA(n_components=50)
-    pca.fit(data_x_mean)
-    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
-
+    if preset["nn"]["PCA"]:
+        pca = PCA(n_components=50)
+        pca.fit(data_x_mean)
+        pca_components = torch.from_numpy(pca.components_.T).float()
+        print(" Using PCA embeddings: mapping 270 to PCA components")
+    else:
+        pca_components = None
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
@@ -129,7 +132,7 @@ def run_that_detrVQ(data_train_x,
     feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
     
     # Get a subset of data for initialization
-    init_loader = DataLoader(data_train_set, batch_size=256, shuffle=True)
+    init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
     init_data, _ = next(iter(init_loader))
     init_data = init_data.to(device)
     
@@ -139,10 +142,9 @@ def run_that_detrVQ(data_train_x,
     # Flatten embeddings for KMeans
     initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
     
-    num_embeddings = preset["nn"]["num_codes"]# Or get from preset
-    kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=10).fit(initial_embeddings_flat)
+    num_embeddings = preset["nn"]["num_codes"]
+    kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
     codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
-    print("K-means initialization complete.")
 
     #
     ##
@@ -168,7 +170,7 @@ def run_that_detrVQ(data_train_x,
                                     dim_feedforward=preset["nn"]["dim_FFN"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     num_embeddings=preset["nn"]["num_codes"],
-                                    pca_embeddings=pca_components.to(torch.device("cpu")),
+                                    pca_embeddings=pca_components,
                                     codebook_initial_embeddings=codebook_initial_embeddings.to(torch.device("cpu"))),var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -187,7 +189,7 @@ def run_that_detrVQ(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="VQ",
+            project="VQ_tes",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -203,10 +205,10 @@ def run_that_detrVQ(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                     num_embeddings=preset["nn"]["num_codes"],
-                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
-                                     commitment_cost=preset["nn"]["commitment_cost"],
-                                         # pca_embeddings=pca_components,
+                                    num_embeddings=preset["nn"]["num_codes"],
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    commitment_cost=preset["nn"]["commitment_cost"],
+                                    pca_embeddings=pca_components if not pca_components else pca_components.to(device),
                                     codebook_initial_embeddings=codebook_initial_embeddings).to(device)
 
         model_detrVQ.feature_extractor = torch.compile(model_detrVQ.feature_extractor)
