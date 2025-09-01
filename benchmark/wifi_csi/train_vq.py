@@ -82,11 +82,6 @@ def train(model: Module,
             if model.training:
                 data_batch_x = apply_augmentation(data_batch_x)
 
-            if var_mode == "count_classification":
-                data_batch_y = data_batch_y.sum(axis=1)
-            elif var_mode == "baseline":
-                data_batch_y = data_batch_y.reshape(data_batch_y.shape[0], -1)
-
             outputs_class, continuous_emb, quantized_emb, indices = model(data_batch_x)
             classification_loss = loss(outputs_class, data_batch_y.float())
             vq_loss = model.compute_vq_loss(continuous_emb, quantized_emb)
