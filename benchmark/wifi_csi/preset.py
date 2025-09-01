@@ -80,8 +80,8 @@ preset = {
         "n_attention_heads": 6,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.25,
-        "num_codes": 64
-
+        "num_codes": 64,
+        "PCA": False
 },
     "jepa": {
         "segment_length": 48,              # Number of timestamps in each segment.
