@@ -76,6 +76,7 @@ preset = {
         "dim_FFN": 512,
         "token_length": 62, #74
         "d_embedding": 48,
+        "n_layers_encoder":8,
         "n_attention_heads": 6,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.25,
