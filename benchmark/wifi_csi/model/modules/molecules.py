@@ -5,62 +5,6 @@ from model.modules.elements import DepthwiseSeparableConv, DilatedConvBlock, Dil
 from preset import preset
 import torch.nn.functional as F
 
-# class PCAFeatureExtractor(nn.Module):
-#     def __init__(self, input_channels=270, output_channels=16, embedding_time_dim=1, pca_components=None):
-#         super(PCAFeatureExtractor, self).__init__()
-#         self.embedding_time_dim = embedding_time_dim
-#
-#         if pca_components is None:
-#             raise ValueError("PCA components must be provided.")
-#         self.register_buffer('pca_components', pca_components)
-#
-#         pca_output_dim = self.pca_components.shape[1]
-#         c_intermediate = 64  # Intermediate channel size
-#
-#         # 1. Simplified feature extraction and temporal reduction
-#         # This single layer replaces the low-pass filter and the first ds_conv
-#         # Assuming input time is 40, stride=4 reduces it to 10
-#         self.feature_extractor = DepthwiseSeparableConv(pca_output_dim, c_intermediate, kernel_size=5, padding=2,
-#                                                         stride=4)
-#         self.bn1 = nn.BatchNorm1d(c_intermediate)
-#         self.relu1 = nn.ReLU()
-#
-#         # 2. Channel Adjustment
-#         self.channel_adjust = nn.Conv1d(c_intermediate, output_channels, kernel_size=1)
-#         self.bn2 = nn.BatchNorm1d(output_channels)
-#         self.relu2 = nn.ReLU()
-#
-#         # 3. Final Temporal Reduction to a single token
-#         # From T=10 to T=1. Kernel size 10 and stride 10 will map 10 -> 1.
-#         self.final_reduction_conv = nn.Conv1d(output_channels, output_channels, kernel_size=10, stride=10)
-#         self.bn_final = nn.BatchNorm1d(output_channels)
-#         self.relu_final = nn.ReLU()
-#
-#     def forward(self, x):
-#         # Input x shape: (batch, time, channels_in) e.g. (B, 40, 270)
-#         # PCA projection
-#         x = torch.matmul(x, self.pca_components)  # (B, 40, pca_dim)
-#
-#         x = x.permute(0, 2, 1)  # (batch, pca_dim, time) e.g. (B, pca_dim, 40)
-#
-#         # 1. Feature extraction and temporal reduction
-#         x = self.feature_extractor(x)  # T: 40 -> 10
-#         x = self.bn1(x)
-#         x = self.relu1(x)
-#
-#         # 2. Channel Adjustment
-#         x = self.channel_adjust(x)
-#         x = self.bn2(x)
-#         x = self.relu2(x)
-#
-#         # 3. Final Temporal Reduction
-#         x = self.final_reduction_conv(x)  # T: 10 -> 1
-#         x = self.bn_final(x)
-#         x = self.relu_final(x)
-#
-#         # Output shape: (batch, 1, output_channels)
-#         return x.permute(0, 2, 1)
-
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, commitment_cost, initial_embeddings=None):
         super(VectorQuantizer, self).__init__()
@@ -75,20 +19,22 @@ class VectorQuantizer(nn.Module):
             self.embedding.weight.data.uniform_(-1/self.num_embeddings, 1/self.num_embeddings)
 
     def forward(self, inputs):
-        # convert inputs from B, T, C -> B, T, C
+
         inputs_contiguous = inputs.contiguous()
         input_shape = inputs_contiguous.shape
         
         # Flatten input
         flat_input = inputs_contiguous.view(-1, self.embedding_dim)
         
-        # Calculate distances
+        # Here we want to calculate the distance between flat_input and embeddings, we use
+        # : ||a-b||² = ||a||² + ||b||² - 2a·b
         distances = (torch.sum(flat_input**2, dim=1, keepdim=True) 
                     + torch.sum(self.embedding.weight**2, dim=1)
                     - 2 * torch.matmul(flat_input, self.embedding.weight.t()))
             
-        # Encoding
+        # Now we find out which of the quantized inputs are closes to what we have there.
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
+        # creating a zeros matrix, then put 1 where at indexes in in encoding_indicies
         encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device)
         encodings.scatter_(1, encoding_indices, 1)
         
