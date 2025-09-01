@@ -53,13 +53,12 @@ def train(model: Module,
     var_best_PPP = 0
     var_best_weight = deepcopy(model.state_dict())
 
-    if var_mode == "multi_head":
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=preset["nn"]["scheduler"]["num_warmup_epochs"] * len(data_train_loader),
-            num_training_steps=preset["nn"]["epoch"] * len(data_train_loader),
-            min_lr_ratio=preset["nn"]["scheduler"]["min_lr_ratio"]
-        )
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=preset["nn"]["scheduler"]["num_warmup_epochs"] * len(data_train_loader),
+        num_training_steps=preset["nn"]["epoch"] * len(data_train_loader),
+        min_lr_ratio=preset["nn"]["scheduler"]["min_lr_ratio"]
+    )
 
     def apply_augmentation(x_batch):
         noise = torch.randn_like(x_batch) * 0.1
