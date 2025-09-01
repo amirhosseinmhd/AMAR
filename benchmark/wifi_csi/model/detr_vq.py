@@ -29,19 +29,14 @@ class DETR_MultiUser_vq(nn.Module):
                  , pca_embeddings=None,
                  num_embeddings=1024, commitment_cost=0.25, codebook_initial_embeddings=None):
         super().__init__()
-        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
-        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"])
-                                                     # embedding_time_dim=preset["cnn_embedding_time_dim"])
-                                                                # pca_components=pca_embeddings)
+        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"],
+                                                                 pca_components=None)
 
         self.vq_layer = VectorQuantizer(num_embeddings=num_embeddings,
                                       embedding_dim=preset["nn"]["d_embedding"],
                                       commitment_cost=commitment_cost,
                                       initial_embeddings=codebook_initial_embeddings)
-
-        # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
-        #                                    num_transformer_encoder_layers=8)
-        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=8,
+        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["n_layers_encoder"],
                  max_total_tokens=preset["nn"]["token_length"])
         self.decoder = TransformerDecoder(
             d_model=features_dim,
