@@ -12,6 +12,7 @@ preset = {
     "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "00",
     "model": "DETR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+                                 # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
                                                             #JOINT_DETR, JEPA_HYB, "JEPA", "DETR_VQ", "DETR_RVQ"
     # "model": "MLP",
@@ -19,7 +20,7 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 1,
+    "repeat": 3,
     ## path of data
     "path": {
 
@@ -38,7 +39,7 @@ preset = {
     "data": {
         "num_users": ["0","1", "2", "3", "4", "5"] ,   # select number(s) of users, (e.g., ["0", "1"], ["2", "3", "4", "5"])
         "wifi_band": ["5"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
-        "environment": ["classroom"],# $, "classroom","empty_room"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
+        "environment": ["classroom"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
         "length": 3000,                                 # default length of CSI
     },
     "data_band2": {
@@ -83,6 +84,7 @@ preset = {
         "num_codes": 64,
         "num_rvq_layers": 3,  # Number of RVQ layers (V+1 in the formula)
         "PCA": False
+
 },
     "jepa": {
         "segment_length": 48,              # Number of timestamps in each segment.
