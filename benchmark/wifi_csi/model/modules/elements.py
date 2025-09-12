@@ -1,6 +1,7 @@
 
 from torch import nn
 import torch
+import math
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, padding, stride=1):
@@ -9,10 +10,14 @@ class DepthwiseSeparableConv(nn.Module):
             in_channels, in_channels, kernel_size, padding=padding, groups=in_channels, stride=stride
         )
         self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         x = self.depthwise(x)
         x = self.pointwise(x)
+        x = self.bn(x)
+        x = self.relu(x)
         return x
 
 
@@ -36,48 +41,25 @@ class DilatedConvBlock(nn.Module):
 class Dilated_Blocks(nn.Module):
     def __init__(self, output_channels):
         super().__init__()
-
-        # Parallel dilated convolutions instead of sequential blocks
+        # Parallel dilated convolutions
         self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
         self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
         self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
         self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
 
-        # 1x1 convolution to combine features (if needed)
-        self.combine_conv = nn.Conv1d(output_channels, output_channels, kernel_size=1)
-
+        # Remove combine_conv since it's not used
         self.relu = nn.ReLU()
 
     def forward(self, x):
         # Parallel dilated convolutions
-        out1 = self.relu(self.dilated_conv1(x))  # Shape: [batch, output_channels//4, 25]
-        out2 = self.relu(self.dilated_conv2(x))  # Shape: [batch, output_channels//4, 25]
-        out4 = self.relu(self.dilated_conv4(x))  # Shape: [batch, output_channels//4, 25]
-        out8 = self.relu(self.dilated_conv8(x))  # Shape: [batch, output_channels//4, 25]
+        out1 = self.relu(self.dilated_conv1(x))
+        out2 = self.relu(self.dilated_conv2(x))
+        out4 = self.relu(self.dilated_conv4(x))
+        out8 = self.relu(self.dilated_conv8(x))
+
         # Concatenate along channel dimension
-        out_concat = torch.cat([out1, out2, out4, out8], dim=1)  # Shape: [batch, output_channels, 25]
-
+        out_concat = torch.cat([out1, out2, out4, out8], dim=1)
         return out_concat
-        #
-
-
-# Channel Attention Mechanism
-class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction_ratio=8):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction_ratio),
-            nn.ReLU(),
-            nn.Linear(channels // reduction_ratio, channels),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        b, c, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1)
-        return x * y
 
 
 

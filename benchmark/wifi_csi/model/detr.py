@@ -34,7 +34,7 @@ class DETR_MultiUser(nn.Module):
 
         # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
         #                                    num_transformer_encoder_layers=8)
-        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=8,
+        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["num"],
                  max_total_tokens=preset["nn"]["token_length"])
         self.decoder = TransformerDecoder(
             d_model=features_dim,
@@ -48,21 +48,8 @@ class DETR_MultiUser(nn.Module):
         )
         self.decoder.memory_pos_encoding = self.encoder.pos_encoder
     def forward(self, x):
-        # Extracting Features
 
-        # Optimized version:
-        batch_size = x.shape[0]
-        num_segments = preset["nn"]["token_length"]
-
-        segment_length = preset["jepa"]["segment_length"]  # Length of each segment
-        input_channels = x.shape[2]
         extracted_features = self.feature_extractor(x)
-
-
-        T_out_segment = extracted_features.shape[1]
-        output_features_dim = extracted_features.shape[2]
-        # var_embedding = extracted_features.reshape(batch_size, num_segments * T_out_segment, output_features_dim)
-
 
         memory = self.encoder(extracted_features)
 
