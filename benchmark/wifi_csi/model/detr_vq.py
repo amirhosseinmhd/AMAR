@@ -284,7 +284,7 @@ def run_that_detrVQ(data_train_x,
                                     pca_embeddings=pca_components if not pca_components else pca_components.to(device),
                                     codebook_initial_embeddings=codebook_initial_embeddings).to(device)
 
-        # model_detrVQ.feature_extractor = torch.compile(model_detrVQ.feature_extractor)
+        model_detrVQ.feature_extractor = torch.compile(model_detrVQ.feature_extractor)
         #
         ##
         optimizer = torch.optim.AdamW(model_detrVQ.parameters(),
@@ -503,7 +503,7 @@ def run_that_detrRVQ(data_train_x,
     
     num_embeddings = preset["nn"]["num_codes"]
     kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
-    codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+    codebook_initial_embeddings = None#torch.from_numpy(kmeans.cluster_centers_).float().to(device)
 
     #
     ##
@@ -530,7 +530,7 @@ def run_that_detrRVQ(data_train_x,
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     num_embeddings=preset["nn"]["num_codes"],
                                     pca_embeddings=pca_components,
-                                    codebook_initial_embeddings=codebook_initial_embeddings.to(torch.device("cpu")),
+                                    codebook_initial_embeddings=codebook_initial_embeddings,
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]),var_x_shape, as_strings=False)
 
     print("RVQ Model Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -547,8 +547,8 @@ def run_that_detrRVQ(data_train_x,
             name_run = f"DETR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="RVQ_test",
-            name= name_run + preset["wandb_name"] + f"_rvq{preset['nn']['num_rvq_layers']}",
+            project="RVQ_VQ_Comparison",
+            name= name_run + preset["wandb_name"],
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
         )
@@ -567,10 +567,10 @@ def run_that_detrRVQ(data_train_x,
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     commitment_cost=preset["nn"]["commitment_cost"],
                                     pca_embeddings=pca_components if not pca_components else pca_components.to(device),
-                                    codebook_initial_embeddings=codebook_initial_embeddings,
+                                    codebook_initial_embeddings=codebook_initial_embeddings if not codebook_initial_embeddings else codebook_initial_embeddings.to(device),
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 
-        # model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
+        model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
         #
         ##
         optimizer = torch.optim.AdamW(model_detrRVQ.parameters(),
