@@ -9,106 +9,324 @@ import os
 import re
 
 
+# def load_model_components(model, load_path, lr, scenario="full", device=None):
+#     """
+#     Selectively load model components based on scenario from full model state dict
+#     Args:
+#         model: DETR_MultiUser model
+#         load_path: Path to load full model state dict
+#         lr: Base learning rate
+#         scenario: One of ["full", "feature_extractor", "feature_encoder", "decoder_only"]
+#         device: torch device
+#     Returns:
+#         model: Updated model
+#         param_groups: List of parameter groups with their learning rates
+#     """
+#     if device is None:
+#         # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+#         if torch.cuda.is_available():
+#             device = torch.device("cuda")
+#         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+#             device = torch.device("mps")
+#         else:
+#             device = torch.device("cpu")
+#
+#         print(f"Using device: {device}")
+#     # Load full state dict
+#     state_dict = torch.load(load_path, map_location=device)
+#     param_groups = []
+#
+#     if scenario == "full":
+#         # Use full model as initialization
+#         model.load_state_dict(state_dict)
+#         param_groups.append({'params': model.parameters(), 'lr': lr})
+#
+#     elif scenario == "feature_extractor":
+#         # Only load feature extractor, keep other components random
+#         feature_extractor_dict = {k: v for k, v in state_dict.items()
+#                                   if k.startswith('feature_extractor.')}
+#         model.feature_extractor.load_state_dict(
+#             {re.sub('^feature_extractor\.', '', k): v
+#              for k, v in feature_extractor_dict.items()}
+#         )
+#         # Different learning rates for different components
+#         param_groups.extend([
+#             {'params': model.feature_extractor.parameters(), 'lr': lr * 0.0001},  # Very small lr for pretrained component
+#             {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr for new components
+#             {'params': model.decoder.parameters(), 'lr': lr}
+#         ])
+#
+#     elif scenario == "feature_encoder":
+#         # Load feature extractor and encoder, keep decoder random
+#         feature_encoder_dict = {k: v for k, v in state_dict.items()
+#                                 if k.startswith('feature_extractor.') or k.startswith('encoder.')}
+#         # Load feature extractor
+#         feature_dict = {re.sub('^feature_extractor\.', '', k): v
+#                         for k, v in feature_encoder_dict.items()
+#                         if k.startswith('feature_extractor.')}
+#         model.feature_extractor.load_state_dict(feature_dict)
+#         # # Freeze feature extractor parameters
+#         # for param in model.feature_extractor.parameters():
+#         #     param.requires_grad = False
+#         # Load encoder
+#         encoder_dict = {re.sub('^encoder\.', '', k): v
+#                         for k, v in feature_encoder_dict.items()
+#                         if k.startswith('encoder.')}
+#         model.encoder.load_state_dict(encoder_dict)
+#         # Different learning rates for different components
+#         param_groups.extend([
+#             # feature_extractor parameters are frozen, so not included here
+#             {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},
+#             # Very small lr for pretrained component
+#             {'params': model.encoder.parameters(), 'lr': lr * 0.1},  # Small lr
+#             {'params': model.decoder.parameters(), 'lr': lr}  # Regular lr
+#         ])
+#
+#     elif scenario == "decoder_only":
+#         # Keep feature extractor and encoder random, only load decoder
+#         decoder_dict = {k: v for k, v in state_dict.items()
+#                         if k.startswith('decoder.')}
+#         model.decoder.load_state_dict(
+#             {re.sub('^decoder\.', '', k): v
+#              for k, v in decoder_dict.items()}
+#         )
+#         # Different learning rates for different components
+#         param_groups.extend([
+#             {'params': model.feature_extractor.parameters(), 'lr': lr},  # Regular lr
+#             {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr
+#             {'params': model.decoder.parameters(), 'lr': lr * 0.1}  # Small lr for pretrained component
+#         ])
+#
+#     else:
+#         raise ValueError(
+#             f"Unknown scenario: {scenario}. Choose from: 'full', 'feature_extractor', 'feature_encoder', 'decoder_only'")
+#
+#     print(f"Loaded model components for scenario: {scenario}")
+#     return model, param_groups
+#
+# def save_model_components(preset, model):
+#     """
+#     Save model components based on scenario
+#     Args:
+#         model: DETR_MultiUserJoint model
+#         save_dir: Directory to save model
+#         scenario: One of ["full", "feature_extractor", "feature_encoder"]
+#     """
+#     save_dir = preset.get("saving_path") + f"model_0"
+#     saving_path = preset.get("saving_path", "0")
+#     if not os.path.exists(saving_path):
+#         raise ValueError(f"Saving path {saving_path} does not exist.")
+#
+#     save_dir = saving_path + f"model_0"
+#     env = "_".join(preset["data"]["environment"])
+#     model_ = preset["model"]
+#     torch.save(model.state_dict(), f"{save_dir}/PT_{env}_{model_}.pth")
+#     print(f"Model saved at {save_dir}/PT_{env}_{model_}.pth")
+
+
+
 def load_model_components(model, load_path, lr, scenario="full", device=None):
     """
-    Selectively load model components based on scenario from full model state dict
+    Selectively load JEPA model components based on scenario from full model state dict
+
     Args:
-        model: DETR_MultiUser model
+        model: JEPA_Sup model
         load_path: Path to load full model state dict
         lr: Base learning rate
-        scenario: One of ["full", "feature_extractor", "feature_encoder", "decoder_only"]
+        scenario: One of ["full", "freeze_encoder", "low_lr_encoder", "decoder_only", "new_init"]
         device: torch device
+
     Returns:
-        model: Updated model
+        model: Updated model with loaded weights
         param_groups: List of parameter groups with their learning rates
     """
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Load full state dict
-    state_dict = torch.load(load_path, map_location=device)
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        print(f"Using device: {device}")
+
+    # Handle the case where no pretrained model should be loaded
+    if scenario == "new_init":
+        print("Using random initialization for all components")
+        param_groups = [{'params': model.parameters(), 'lr': lr}]
+        return model, param_groups
+
+    # Load pretrained state dict
+    try:
+        checkpoint = torch.load(load_path, map_location=device)
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            state_dict = checkpoint
+    except Exception as e:
+        print(f"Error loading checkpoint: {e}")
+        print("Using random initialization for all components")
+        param_groups = [{'params': model.parameters(), 'lr': lr}]
+        return model, param_groups
+
     param_groups = []
+    loaded_components = []
 
+    def clean_key_name(key):
+        """Remove _orig_mod. prefix from torch.compile() keys"""
+        return key.replace('_orig_mod.', '')
+
+    def load_component(component_name, target_module, lr_multiplier=1.0, freeze=False):
+        """Helper function to load a specific component"""
+        # Find keys that match the component (handle both compiled and non-compiled)
+        component_dict = {}
+        prefixes = [f'{component_name}.', f'{component_name}._orig_mod.']
+
+        for key, value in state_dict.items():
+            for prefix in prefixes:
+                if key.startswith(prefix):
+                    # Clean the key name for loading
+                    clean_key = clean_key_name(key)
+                    target_key = clean_key.replace(f'{component_name}.', '')
+                    component_dict[target_key] = value
+                    break
+
+        if component_dict:
+            try:
+                target_module.load_state_dict(component_dict, strict=False)
+                loaded_components.append(component_name)
+                print(f"✅ Loaded {component_name} ({len(component_dict)} parameters)")
+
+                # Set learning rate and freezing
+                if freeze:
+                    for param in target_module.parameters():
+                        param.requires_grad = False
+                    print(f"🔒 Frozen {component_name}")
+                else:
+                    param_groups.append({
+                        'params': target_module.parameters(),
+                        'lr': lr * lr_multiplier,
+                        'name': component_name
+                    })
+                    print(f"📚 {component_name} LR: {lr * lr_multiplier}")
+            except Exception as e:
+                print(f"❌ Failed to load {component_name}: {e}")
+        else:
+            print(f"⚠️ No weights found for {component_name}")
+
+    # Execute loading based on scenario
     if scenario == "full":
-        # Use full model as initialization
-        model.load_state_dict(state_dict)
-        param_groups.append({'params': model.parameters(), 'lr': lr})
+        # Load everything and use normal learning rates
+        try:
+            # Handle compiled model state dict
+            cleaned_state_dict = {}
+            for key, value in state_dict.items():
+                cleaned_key = clean_key_name(key)
+                cleaned_state_dict[cleaned_key] = value
 
-    elif scenario == "feature_extractor":
-        # Only load feature extractor, keep other components random
-        feature_extractor_dict = {k: v for k, v in state_dict.items()
-                                  if k.startswith('feature_extractor.')}
-        model.feature_extractor.load_state_dict(
-            {re.sub('^feature_extractor\.', '', k): v
-             for k, v in feature_extractor_dict.items()}
-        )
-        # Different learning rates for different components
-        param_groups.extend([
-            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr for pretrained component
-            {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr for new components
-            {'params': model.decoder.parameters(), 'lr': lr}
-        ])
+            model.load_state_dict(cleaned_state_dict, strict=False)
+            param_groups.append({'params': model.parameters(), 'lr': lr})
+            print("✅ Loaded full model with all pretrained weights")
+        except Exception as e:
+            print(f"❌ Failed to load full model: {e}")
+            param_groups.append({'params': model.parameters(), 'lr': lr})
 
-    elif scenario == "feature_encoder":
-        # Load feature extractor and encoder, keep decoder random
-        feature_encoder_dict = {k: v for k, v in state_dict.items()
-                                if k.startswith('feature_extractor.') or k.startswith('encoder.')}
-        # Load feature extractor
-        feature_dict = {re.sub('^feature_extractor\.', '', k): v
-                        for k, v in feature_encoder_dict.items()
-                        if k.startswith('feature_extractor.')}
-        model.feature_extractor.load_state_dict(feature_dict)
-        # Load encoder
-        encoder_dict = {re.sub('^encoder\.', '', k): v
-                        for k, v in feature_encoder_dict.items()
-                        if k.startswith('encoder.')}
-        model.encoder.load_state_dict(encoder_dict)
-        # Different learning rates for different components
-        param_groups.extend([
-            {'params': model.feature_extractor.parameters(), 'lr': lr * 0.01},  # Very small lr
-            {'params': model.encoder.parameters(), 'lr': lr * 0.1},  # Small lr
-            {'params': model.decoder.parameters(), 'lr': lr}  # Regular lr
-        ])
+    elif scenario == "freeze_encoder":
+        # A. Freeze feature extractor and transformer encoder, normal learning for decoder
+        load_component('online_cnn_feature_extractor', model.online_cnn_feature_extractor, freeze=True)
+        load_component('online_transformer_encoder', model.online_transformer_encoder, freeze=True)
+
+        # Decoder gets normal learning rate (not loaded from pretrained)
+        param_groups.append({
+            'params': model.decoder.parameters(),
+            'lr': lr,
+            'name': 'decoder'
+        })
+        print(f"📚 decoder LR: {lr}")
+
+    elif scenario == "low_lr_encoder":
+        # B. Low learning rate for encoders, normal lr for decoder
+        load_component('online_cnn_feature_extractor', model.online_cnn_feature_extractor, lr_multiplier=0.01)
+        load_component('online_transformer_encoder', model.online_transformer_encoder, lr_multiplier=0.1)
+
+        # Decoder gets normal learning rate (not loaded from pretrained)
+        param_groups.append({
+            'params': model.decoder.parameters(),
+            'lr': lr,
+            'name': 'decoder'
+        })
+        print(f"📚 decoder LR: {lr}")
 
     elif scenario == "decoder_only":
-        # Keep feature extractor and encoder random, only load decoder
-        decoder_dict = {k: v for k, v in state_dict.items()
-                        if k.startswith('decoder.')}
-        model.decoder.load_state_dict(
-            {re.sub('^decoder\.', '', k): v
-             for k, v in decoder_dict.items()}
-        )
-        # Different learning rates for different components
+        # Load only decoder, keep encoders random with normal learning rates
+        load_component('decoder', model.decoder, lr_multiplier=0.1)
+
+        # Encoders get normal learning rates (random initialization)
         param_groups.extend([
-            {'params': model.feature_extractor.parameters(), 'lr': lr},  # Regular lr
-            {'params': model.encoder.parameters(), 'lr': lr},  # Regular lr
-            {'params': model.decoder.parameters(), 'lr': lr * 0.1}  # Small lr for pretrained component
+            {
+                'params': model.online_cnn_feature_extractor.parameters(),
+                'lr': lr,
+                'name': 'online_cnn_feature_extractor'
+            },
+            {
+                'params': model.online_transformer_encoder.parameters(),
+                'lr': lr,
+                'name': 'online_transformer_encoder'
+            }
         ])
+        print(f"📚 Encoders LR: {lr}")
 
     else:
         raise ValueError(
-            f"Unknown scenario: {scenario}. Choose from: 'full', 'feature_extractor', 'feature_encoder', 'decoder_only'")
+            f"Unknown scenario: {scenario}. Choose from: "
+            f"'full', 'freeze_encoder', 'low_lr_encoder', 'decoder_only', 'new_init'"
+        )
 
-    print(f"Loaded model components for scenario: {scenario}")
+    # Always update target encoder to match online encoder (for EMA)
+    if hasattr(model, 'target_cnn_feature_extractor') and hasattr(model, 'target_transformer_encoder'):
+        try:
+            model.target_cnn_feature_extractor.load_state_dict(
+                model.online_cnn_feature_extractor.state_dict()
+            )
+            model.target_transformer_encoder.load_state_dict(
+                model.online_transformer_encoder.state_dict()
+            )
+            print("✅ Updated target encoders to match online encoders")
+        except Exception as e:
+            print(f"⚠️ Could not update target encoders: {e}")
+
+    print(f"🎯 Loaded model components for scenario: {scenario}")
+    print(f"📊 Components loaded: {loaded_components}")
+
     return model, param_groups
 
+
+# Helper function to save model components
 def save_model_components(preset, model):
-    """
-    Save model components based on scenario
-    Args:
-        model: DETR_MultiUserJoint model
-        save_dir: Directory to save model
-        scenario: One of ["full", "feature_extractor", "feature_encoder"]
-    """
-    save_dir = preset.get("saving_path") + f"model_0"
-    saving_path = preset.get("saving_path", "0")
-    if not os.path.exists(saving_path):
-        raise ValueError(f"Saving path {saving_path} does not exist.")
-    
-    save_dir = saving_path + f"model_0"
-    env = "_".join(preset["data"]["environment"])
-    model_ = preset["model"]
-    torch.save(model.state_dict(), f"{save_dir}/PT_{env}_{model_}.pth")
-    print(f"Model saved at {save_dir}/PT_{env}_{model_}.pth")
+    """Save model components based on preset configuration"""
+    if not preset.get("save_model"):
+        return
+
+    import os
+    import time
+
+    # Create save directory
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    save_dir = os.path.join(
+        preset["path"].get("models_dir", "./saved_models"),
+        f"jepa_sup_{'+'.join(preset['data']['environment'])}_{timestamp}"
+    )
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Save full model
+    model_path = os.path.join(save_dir, "full_model.pth")
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'config': preset,
+        'environment': preset['data']['environment']
+    }, model_path)
+
+    print(f"💾 Model saved to: {model_path}")
+    return model_path
 def error_per_number_person(y_pred, y_true):
     """
     Args:
@@ -331,10 +549,10 @@ def performance_metrics_joint(y_true_act, y_pred_act, y_true_loc, y_pred_loc):
     y_true_act = y_true_act.sum(axis=1)
 
     # Metrics for activity prediction
-    act_metrics = calculate_scores(y_true_act, last_act_pred, batch_size)
+    act_metrics = calculate_scores(y_true_act, last_act_pred)
 
     # Metrics for location prediction
-    loc_metrics = calculate_scores(y_true_loc, last_loc_pred, batch_size)
+    loc_metrics = calculate_scores(y_true_loc, last_loc_pred)
 
     return act_metrics, loc_metrics
 
@@ -660,9 +878,10 @@ def log_attention_weights(model, y_pred, y_actual, epoch):
         num_layers = len(decoder_layers)
         # Now iterate through layers using the same sample
         for layer_idx, layer in enumerate(decoder_layers):
-            attn_weights = layer.cross_attn_weights.detach().clone()
+            attn_weights = layer.cross_attn_weights
             if attn_weights is None:
                 continue
+            attn_weights = attn_weights.detach().clone()
             if layer_idx != num_layers - 1:
                 continue
             # Assuming attn_weights shape is now [batch_size, num_heads, target_seq_len, source_seq_len]

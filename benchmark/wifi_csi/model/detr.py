@@ -10,17 +10,16 @@ from sklearn.model_selection import train_test_split
 import torch.nn as nn
 from torch.utils.data import TensorDataset
 from ptflops import get_model_complexity_info
-from itertools import permutations
-from sklearn.metrics import classification_report, accuracy_score
-from scipy.optimize import linear_sum_assignment
+from sklearn.decomposition import PCA
+from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder
+from model.losses.supervised_loss import HungarianMatchingLoss
 from train import train
 from preset import preset
-import torch.nn.functional as F
 from utils import *
 import wandb
-from collections import Counter
 
 
+<<<<<<< HEAD
 def strat_train_test_split(data_x, data_y, test_size, shuffle, random_state):
     """
     Splits data into training and testing sets using stratification based on the sum of data_y along a specified axis.
@@ -574,39 +573,25 @@ class TransformerDecoderLayer(nn.Module):
         tgt = self.norm3(tgt)
 
         return tgt
+=======
+>>>>>>> VQ
 
-
-class TemperatureMultiheadAttention(nn.MultiheadAttention):
-    def __init__(self, embed_dim, num_heads, temperature=2.0, **kwargs):
-        super().__init__(embed_dim, num_heads, **kwargs)
-        self.temperature = temperature
-        self.attention_weights = None  # Store attention weights
-
-    def forward(self, query, key, value, key_padding_mask=None,
-                need_weights=True, attn_mask=None, average_attn_weights=True):
-        # Regular attention computation
-        attn_output, attn_weights = super().forward(
-            query, key, value,
-            key_padding_mask=key_padding_mask,
-            need_weights=True,  # Always compute weights
-            attn_mask=attn_mask,
-            average_attn_weights=False # gets the average across all heads
-        )
-
-        # Apply temperature scaling to attention output
-        attn_output = attn_output / self.temperature
-
-        return attn_output, attn_weights
 
 
 class DETR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0
+                 , pca_embeddings=None,):
         super().__init__()
-        self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
-        var_embedding_shape = (embedding_time_dim, features_dim)
-        self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
-                                           num_transformer_encoder_layers=4)
+        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
+        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"])
+                                                     # embedding_time_dim=preset["cnn_embedding_time_dim"])
+                                                                # pca_components=pca_embeddings)
+
+        # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
+        #                                    num_transformer_encoder_layers=8)
+        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["num"],
+                 max_total_tokens=preset["nn"]["token_length"])
         self.decoder = TransformerDecoder(
             d_model=features_dim,
             nhead=n_attention_heads,
@@ -615,159 +600,18 @@ class DETR_MultiUser(nn.Module):
             dropout=0.1,
             num_queries=num_queries,
             temp_cross_attention=temp_cross, 
-            seq_length=embedding_time_dim,
-            query_dropout_rate=query_dropout_rate 
+            query_dropout_rate=query_dropout_rate
         )
-
+        self.decoder.memory_pos_encoding = self.encoder.pos_encoder
     def forward(self, x):
-        # Extracting Features
-        var_embedding = self.feature_extractor(x)
 
+        extracted_features = self.feature_extractor(x)
 
-        memory = self.encoder(var_embedding)  # Shape: (B, 420, 270)
+        memory = self.encoder(extracted_features)
 
-        # Pass through decoder to get predictions from all layers
-        outputs_class = self.decoder(memory)  # Shape: [num_layers + 1, B, num_queries, num_classes]
+        outputs_class = self.decoder(memory)
 
         return outputs_class
-
-
-class HungarianMatchingLoss(nn.Module):
-    def __init__(self, cost_class_weight, aux_loss_weight, label_smoothing, class_imbalance_weight):
-        super().__init__()
-        self.cost_class = cost_class_weight
-        self.aux_loss_weight = aux_loss_weight
-
-        weights = torch.ones(10)
-        weights[-1] = class_imbalance_weight
-        weights = weights * (len(weights) / weights.sum())
-
-        self.ce_loss = nn.CrossEntropyLoss(
-            weight=weights.to(torch.device('cuda')),
-            label_smoothing=label_smoothing
-        )
-
-    @torch.no_grad()
-    def Hungarian_matching(self, outputs, targets):
-        """
-        Performs the matching between predictions and ground truth
-        Args:
-            outputs: Tensor of shape (batch_size, num_queries, num_classes)
-            targets: Tensor of shape (batch_size, num_queries, num_classes)
-        Returns:
-            A list of size batch_size, containing tuples of (index_i, index_j) where:
-                - index_i is the indices of the selected predictions (in order)
-                - index_j is the indices of the corresponding selected targets (in order)
-        """
-        bs, num_queries = outputs.shape[:2]
-
-        # Compute classification cost matrix
-        out_prob = outputs.softmax(-1)  # [batch_size, num_queries, num_classes]
-        tgt_ids = targets.argmax(-1)  # [batch_size, num_queries]
-
-        indices = []
-        # Process each batch independently
-        for b in range(bs):
-            # Compute cost matrix for current
-            # Create cost matrix showing how well each prediction matches each target
-            cost_matrix = -out_prob[b][:, tgt_ids[b]]  # [num_queries, num_queries]
-            cost_matrix = self.cost_class * cost_matrix.cpu().numpy()
-
-            # Run Hungarian algorithm
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
-            # Convert to tensors and move to correct device
-            row_ind = torch.as_tensor(row_ind, dtype=torch.int64, device=outputs.device) # Which queries to use
-            col_ind = torch.as_tensor(col_ind, dtype=torch.int64, device=outputs.device) # Which targets they match to
-            indices.append((row_ind, col_ind))
-            """
-            tgt_ids[b]
-            Out[1]: tensor([1, 1, 1, 1, 9], device='cuda:0')
-            Example how it works:
-            [[-0.1645718 , -0.1645718 , -0.1645718 , -0.1645718 , -0.07412154],  # Query 0
-             [-0.14723456, -0.14723456, -0.14723456, -0.14723456, -0.08399412],  # Query 1
-             [-0.16388056, -0.16388056, -0.16388056, -0.16388056, -0.05493092],  # Query 2
-             [-0.1868437 , -0.1868437 , -0.1868437 , -0.1868437 , -0.07625321],  # Query 3
-             [-0.20076165, -0.20076165, -0.20076165, -0.20076165, -0.0671524 ]]  # Query 4
-            row_ind = [0, 1, 2, 3, 4]  # Which queries to use
-            col_ind = [0, 4, 2, 3, 1]  # Which targets they match to
-            This means:
-                
-                Query 0 matches with target 0 (class 1)
-                Query 1 matches with target 4 (class 9)
-                Query 2 matches with target 2 (class 1)
-                Query 3 matches with target 3 (class 1)
-                Query 4 matches with target 1 (class 1)
-            Another Example which is easier:
-            Ground truth labels tgt_ids[b] = [8, 0, 9, 1, 8] (5 targets)
-            # Cost Matrix:
-            [[-0.0751, -0.1023, -0.0876, -0.2142, -0.0751],  # Query 0
-             [-0.0911, -0.0929, -0.0980, -0.2144, -0.0911],  # Query 1
-             [-0.0606, -0.0813, -0.1075, -0.2602, -0.0606],  # Query 2
-             [-0.0867, -0.1077, -0.1456, -0.1916, -0.0867],  # Query 3
-             [-0.0803, -0.1265, -0.1192, -0.1970, -0.0803]]  # Query 4
-            
-                IMPORTANT:
-                This cost matrix was created by selecting probabilities from out_prob based on tgt_ids:
-
-                Column 0: probabilities for class 8 (first target)
-                Column 1: probabilities for class 0 (second target)
-                Column 2: probabilities for class 9 (third target)
-                Column 3: probabilities for class 1 (fourth target)
-                Column 4: probabilities for class 8 (fifth target)
-                
-                row_ind = [0, 1, 2, 3, 4]    # Predictions to use
-                col_ind = [4, 0, 3, 2, 1]    # Which targets they match to
-            """
-
-        return indices
-
-    def _get_layer_loss(self, pred, target, indices):
-        """Helper to compute loss for a single layer's predictions"""
-        losses = []
-        for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
-            pred_i = pred[batch_idx][pred_idx]
-            tgt_i = target[batch_idx][tgt_idx]
-            loss = self.ce_loss(pred_i, tgt_i.argmax(-1))
-            losses.append(loss.mean()) ### REMOVE MEAN HERE! UNNECESSARY
-        return torch.stack(losses).mean()
-
-    def forward(self, outputs, targets):
-        """
-        Args:
-            outputs: If auxiliary losses enabled: Tensor of shape [num_layers + 1, B, num_queries, num_classes]
-                    Otherwise: Tensor of shape [B, num_queries, num_classes]
-            targets: Tensor of shape [B, num_queries, num_classes]
-        """
-        # Check if we have auxiliary outputs
-        if outputs.dim() == 4:  # Has auxiliary outputs [num_layers + 1, B, num_queries, num_classes]
-            # Split predictions from different decoder layers
-            aux_outputs = outputs[:-1]  # Predictions from intermediate layers
-            outputs_final = outputs[-1]  # Predictions from final layer
-
-            # Calculate matching using only the final layer predictions
-            indices = self.Hungarian_matching(outputs_final, targets)
-
-            # Calculate loss for final predictions using final layer matching
-            final_loss = self._get_layer_loss(outputs_final, targets, indices)
-
-            # Calculate auxiliary losses using the SAME indices from final layer
-            aux_losses = []
-            for aux_output in aux_outputs:
-                # Use the same matching indices for all auxiliary layers
-                layer_loss = self._get_layer_loss(aux_output, targets, indices)
-                aux_losses.append(layer_loss)
-
-            # Combine losses
-            aux_loss = torch.stack(aux_losses).mean() if aux_losses else torch.tensor(0.0)
-            total_loss = final_loss + self.aux_loss_weight * aux_loss
-
-            return total_loss
-
-        else:  # No auxiliary outputs, just compute regular loss
-            indices = self.Hungarian_matching(outputs, targets)
-            return self._get_layer_loss(outputs, targets, indices)
-
 
 
 def run_that_detr(data_train_x,
@@ -789,10 +633,17 @@ def run_that_detr(data_train_x,
     """
     #
     ##
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    #
-    ##
     ## ============================================ Preprocess ============================================
+    #
+    # Update device selection to check for CUDA first, then MPS (Apple Silicon), then CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    print(f"Using device: {device}")
     #
     ## Remove the internal validation split since validation data is now provided directly
     # data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
@@ -810,6 +661,11 @@ def run_that_detr(data_train_x,
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
+    data_x_mean = np.mean(data_train_x, axis=1)
+    pca = PCA(n_components=50)
+    pca.fit(data_x_mean)
+    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
+
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
@@ -839,8 +695,8 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),
-                                                     var_x_shape, as_strings=False)
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    pca_embeddings=pca_components.to(torch.device("cpu"))),var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -874,8 +730,12 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]).to(device) 
-        # wandb.watch(
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]#,
+                                    # pca_embeddings=pca_components
+                                    ).to(device)
+
+        # model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
+        # model_detr.decoder = torch.compile(model_detr.decoder)        # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
         #     log_freq=50,  # Frequency of logging

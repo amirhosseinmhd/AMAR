@@ -66,7 +66,7 @@ def train(model: Module,
     def apply_augmentation(x_batch):
         noise = torch.randn_like(x_batch) * 0.1
         x_batch = x_batch + noise
-        scale = torch.rand(x_batch.size(0), 1, device=x_batch.device) * 0.2 + 0.9
+        scale = torch.rand(x_batch.size(0), 1, device=x_batch.device) * 0.2 + 1
         x_batch = x_batch * scale.unsqueeze(-1)
         mask = torch.bernoulli(torch.ones_like(x_batch) * 0.96)
         x_batch = x_batch * mask
@@ -78,6 +78,13 @@ def train(model: Module,
         model.train()
         total_batches = len(data_train_loader)
 
+        # Adjust learning rate for feature_extractor after 50 epochs
+        if var_epoch == 50 and not preset.get("pretrained_path"):
+            for param_group in optimizer.param_groups:
+                if param_group.get('name') == 'feature_extractor':
+                    param_group['lr'] /= 5
+                    print(f"Reduced LR for feature_extractor to {param_group['lr']} at epoch {var_epoch}")
+
         for batch_idx, data_batch in enumerate(data_train_loader):
             data_batch_x, data_batch_y = data_batch
             data_batch_x = data_batch_x.to(device)
@@ -88,7 +95,7 @@ def train(model: Module,
 
             if var_mode == "count_classification":
                 data_batch_y = data_batch_y.sum(axis=1)
-            if var_mode == "baseline":
+            elif var_mode == "baseline":
                 data_batch_y = data_batch_y.reshape(data_batch_y.shape[0], -1)
 
             predict_train_y = model(data_batch_x)

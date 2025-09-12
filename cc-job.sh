@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=40:30:0
+#SBATCH --time=40:40:0
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --gpus-per-node=1
