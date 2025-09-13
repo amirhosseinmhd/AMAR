@@ -34,7 +34,7 @@ class DETR_MultiUser(nn.Module):
 
         # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
         #                                    num_transformer_encoder_layers=8)
-        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["num"],
+        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["n_layers_encoder"],
                  max_total_tokens=preset["nn"]["token_length"])
         self.decoder = TransformerDecoder(
             d_model=features_dim,
@@ -214,7 +214,7 @@ def run_that_detr(data_train_x,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
-                                data_test_set=data_valid_set,
+                                data_valid_set=data_valid_set,
                                 var_threshold=preset["nn"]["threshold"],
                                 var_batch_size=preset["nn"]["batch_size"],
                                 var_epochs=preset["nn"]["epoch"],

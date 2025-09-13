@@ -58,8 +58,8 @@ preset = {
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
-            "num_warmup_epochs": 3,  # number of warmup epochs
-            "min_lr_ratio": 0.1  # minimum learning rate ratio
+            "num_warmup_epochs": 10,  # number of warmup epochs
+            "min_lr_ratio": 0.05  # minimum learning rate ratio
         },
         # Loss function parameters
         "loss": {
@@ -70,19 +70,20 @@ preset = {
             "label_smoothing": 0.05,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
+        "KMEANS_Initialization": False,
         "cross_attention_temp": 1,
-        "weight_decay": 1e-4,
+        "weight_decay": 2e-4,
         "num_obj_queries": 5,
-        "num_decoder_layers": 6,
+        "num_decoder_layers": 8,
         "dim_FFN": 512,
-        "token_length": 62, #74
-        "d_embedding": 48,
+        "token_length": 188, #74
+        "d_embedding": 64,
         "n_layers_encoder":4,
-        "n_attention_heads": 6,
+        "n_attention_heads": 4,
         "query_dropout_rate": 0.0,
-        "commitment_cost": 0.25,
-        "num_codes": 64,
-        "num_rvq_layers": 3,  # Number of RVQ layers (V+1 in the formula)
+        "commitment_cost": 0.5,
+        "num_codes": 256,
+        "num_rvq_layers": 6,  # Number of RVQ layers (V+1 in the formula)
         "PCA": False
 
 },
