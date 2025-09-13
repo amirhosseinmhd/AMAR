@@ -45,9 +45,9 @@ echo "Python version: $(python --version)"
 # export DATA_PATH=$SLURM_TMPDIR/$DATA_DIR
 # export AUX_LOSS=0.5
 # export NUM_QUERIES=5
-# export ENVIRONMENTS_EXP=classroom
-# export NUM_DECODER_LAYERS=6
-
+export ENVIRONMENTS_EXP=classroom
+export MODEL_TYPE=DETR
+export NUM_EPOCHS=1
 # export TOKEN_LENGTH=100
 # export EMBEDDING_DIM=16
 # export LABEL_SMOOTHING=0.2 
