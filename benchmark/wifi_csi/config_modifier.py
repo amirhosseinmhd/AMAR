@@ -59,6 +59,12 @@ def update_config_from_env(config):
         config['nn']["loss"]['SSL_coeff'] = float(os.environ['SSL_COEF'])
     if 'VICREG_COEF' in os.environ:
         config['jepa']["loss"]['vicreg_coef'] = float(os.environ['VICREG_COEF'])
+    if 'COMMITMENT_COST' in os.environ:
+        config['nn']['commitment_cost'] = float(os.environ['COMMITMENT_COST'])
+    if 'NUM_CODES' in os.environ:
+        config['nn']['num_codes'] = int(os.environ['NUM_CODES'])
+    if 'NUM_RVQ_LAYERS' in os.environ:
+        config['nn']['num_rvq_layers'] = int(os.environ['NUM_RVQ_LAYERS'])
     return config
 
 
