@@ -199,26 +199,27 @@ def run_that_detrVQ(data_train_x,
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
     # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
     data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
+    if preset["nn"]["KMEANS_Initialization"]:
+        # K-means initialization for VQ-VAE codebook
+        print("Initializing codebook with K-means...")
+        feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
 
-    # K-means initialization for VQ-VAE codebook
-    print("Initializing codebook with K-means...")
-    feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
-    
-    # Get a subset of data for initialization
-    init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
-    init_data, _ = next(iter(init_loader))
-    init_data = init_data.to(device)
-    
-    with torch.no_grad():
-        initial_embeddings = feature_extractor_for_init(init_data)
-    
-    # Flatten embeddings for KMeans
-    initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
-    
-    num_embeddings = preset["nn"]["num_codes"]
-    kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
-    codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+        # Get a subset of data for initialization
+        init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
+        init_data, _ = next(iter(init_loader))
+        init_data = init_data.to(device)
 
+        with torch.no_grad():
+            initial_embeddings = feature_extractor_for_init(init_data)
+
+        # Flatten embeddings for KMeans
+        initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
+
+        num_embeddings = preset["nn"]["num_codes"]
+        kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
+        codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+    else:
+        codebook_initial_embeddings = None
     #
     ##
     ## ========================================= Train & Evaluate =========================================
@@ -244,7 +245,7 @@ def run_that_detrVQ(data_train_x,
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     num_embeddings=preset["nn"]["num_codes"],
                                     pca_embeddings=pca_components,
-                                    codebook_initial_embeddings=codebook_initial_embeddings.to(torch.device("cpu"))),var_x_shape, as_strings=False)
+                                    codebook_initial_embeddings=codebook_initial_embeddings),var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -305,7 +306,7 @@ def run_that_detrVQ(data_train_x,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
-                                data_test_set=data_valid_set,
+                                data_valid_set=data_valid_set,
                                 var_threshold=preset["nn"]["threshold"],
                                 var_batch_size=preset["nn"]["batch_size"],
                                 var_epochs=preset["nn"]["epoch"],
@@ -539,7 +540,6 @@ def run_that_detrRVQ(data_train_x,
         #
         ##
         var_mode = "multi_head"
-        name_run = "Empty"
         if preset["pretrained_path"]:
             name_run = f"DETR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
         else:

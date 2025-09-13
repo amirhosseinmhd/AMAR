@@ -37,7 +37,7 @@ def train(model: Module,
           optimizer: Optimizer,
           loss: Module,
           data_train_set: TensorDataset,
-          data_test_set: TensorDataset,
+          data_valid_set: TensorDataset,
           var_threshold: float,
           var_batch_size: int,
           var_epochs: int,
@@ -47,7 +47,7 @@ def train(model: Module,
     var_epoch_saved = 0
     g = torch.Generator()
     data_train_loader = DataLoader(data_train_set, var_batch_size, shuffle=True, pin_memory=True, generator=g)
-    data_test_loader = DataLoader(data_test_set, len(data_test_set))
+    data_valid_loader = DataLoader(data_valid_set, len(data_valid_set))
 
     # Initialize early stopping variables 
     var_best_f1_score = 0
@@ -114,39 +114,39 @@ def train(model: Module,
 
         model.eval()
         with torch.no_grad():
-            data_test_x, data_test_y = next(iter(data_test_loader))
-            data_test_x = data_test_x.to(device)
-            data_test_y = data_test_y.to(device)
+            data_valid_x, data_valid_y = next(iter(data_valid_loader))
+            data_valid_x = data_valid_x.to(device)
+            data_valid_y = data_valid_y.to(device)
             if var_mode == "count_classification":
-                data_test_y = data_test_y.sum(axis=1)
+                data_valid_y = data_valid_y.sum(axis=1)
             if var_mode == "baseline":
-                data_test_y = data_test_y.reshape(data_test_y.shape[0], -1)
+                data_valid_y = data_valid_y.reshape(data_valid_y.shape[0], -1)
 
-            predict_test_y = model(data_test_x)
-            var_loss_test = loss(predict_test_y, data_test_y.float())
+            predict_valid_y = model(data_valid_x)
+            var_loss_valid = loss(predict_valid_y, data_valid_y.float())
 
-            data_test_y = data_test_y.detach().cpu().numpy()
-            predict_test_y = predict_test_y.detach().cpu().numpy()
+            data_valid_y = data_valid_y.detach().cpu().numpy()
+            predict_valid_y = predict_valid_y.detach().cpu().numpy()
 
-            dict_error_test = performance_metrics(data_test_y, predict_test_y, var_mode, var_threshold)
+            dict_error_valid = performance_metrics(data_valid_y, predict_valid_y, var_mode, var_threshold)
         #     # Log attention weights every N batches
         # if preset["model"] == "DETR"  and var_epoch % 40 == 0:
-        #     log_attention_weights(model, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), var_epoch)
+        #     log_attention_weights(model, np.argmax(predict_valid_y[-1], axis=-1), np.argmax(data_valid_y, axis=-1), var_epoch)
         if preset["model"] == "DETR":
             layers_idxs = ["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
             for layer_idx in layers_idxs:
-                layer_metrics = dict_error_test[layer_idx]
+                layer_metrics = dict_error_valid[layer_idx]
                 layer_train_metrics = dict_error_train[layer_idx]
                 wandb.log({
                     f"{layer_idx}/epoch": var_epoch,
                     f"{layer_idx}/train_loss": var_loss_train.item(),
-                    f"{layer_idx}/test_loss": var_loss_test.item(),
+                    f"{layer_idx}/valid_loss": var_loss_valid.item(),
                     f"{layer_idx}/total_error_train": layer_train_metrics['total_error'],
-                    f"{layer_idx}/total_error_test": layer_metrics['total_error'],
-                    f"{layer_idx}/perfect_prediction_percentage_test": layer_metrics['perfect_prediction_percentage'],
+                    f"{layer_idx}/total_error_valid": layer_metrics['total_error'],
+                    f"{layer_idx}/perfect_prediction_percentage_valid": layer_metrics['perfect_prediction_percentage'],
                     f"{layer_idx}/perfect_prediction_percentage_train": layer_train_metrics[
                         'perfect_prediction_percentage'],
-                    f"{layer_idx}/accuracy_test": layer_metrics['accuracy'],
+                    f"{layer_idx}/accuracy_valid": layer_metrics['accuracy'],
                     f"{layer_idx}/accuracy_train": layer_train_metrics['accuracy'],
                     f"{layer_idx}/precision": layer_metrics['precision'],
                     f"{layer_idx}/recall": layer_metrics['recall'],
@@ -158,10 +158,10 @@ def train(model: Module,
                 if var_epoch % 10 == 0:
                     print(f"--- Layer {layer_idx} - Epoch {var_epoch}/{var_epochs} ---")
                     print(f"  Time: {time.time() - var_time_e0:.6f}s")
-                    print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss Test: {var_loss_test.cpu():.6f}")
-                    print(f"  Total Error Train: {layer_train_metrics['total_error']:.6f} | Total Error Test: {layer_metrics['total_error']:.6f}")
-                    print(f"  Perfect Prediction % Train: {layer_train_metrics['perfect_prediction_percentage']:.6f} | Perfect Prediction % Test: {layer_metrics['perfect_prediction_percentage']:.6f}")
-                    print(f"  Accuracy Train: {layer_train_metrics['accuracy']:.6f} | Accuracy Test: {layer_metrics['accuracy']:.6f}")
+                    print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss valid: {var_loss_valid.cpu():.6f}")
+                    print(f"  Total Error Train: {layer_train_metrics['total_error']:.6f} | Total Error valid: {layer_metrics['total_error']:.6f}")
+                    print(f"  Perfect Prediction % Train: {layer_train_metrics['perfect_prediction_percentage']:.6f} | Perfect Prediction % valid: {layer_metrics['perfect_prediction_percentage']:.6f}")
+                    print(f"  Accuracy Train: {layer_train_metrics['accuracy']:.6f} | Accuracy valid: {layer_metrics['accuracy']:.6f}")
                     print(f"  Precision: {layer_metrics['precision']:.6f} | Recall: {layer_metrics['recall']:.6f} | F1 Score: {layer_metrics['f1_score']:.6f}")
                     print("-" * 30)
         else:
@@ -169,33 +169,33 @@ def train(model: Module,
             wandb.log({
                 "epoch": var_epoch,
                 "train_loss": var_loss_train.item(),
-                "test_loss": var_loss_test.item(),
+                "valid_loss": var_loss_valid.item(),
                 "total_error_train": dict_error_train['total_error'],
-                "total_error_test": dict_error_test['total_error'],
-                "perfect_prediction_percentage_test": dict_error_test['perfect_prediction_percentage'],
+                "total_error_valid": dict_error_valid['total_error'],
+                "perfect_prediction_percentage_valid": dict_error_valid['perfect_prediction_percentage'],
                 "perfect_prediction_percentage_train": dict_error_train['perfect_prediction_percentage'],
-                "accuracy_test": dict_error_test['accuracy'],
+                "accuracy_valid": dict_error_valid['accuracy'],
                 "accuracy_train": dict_error_train['accuracy'],
                 "learning_rate": optimizer.param_groups[0]['lr'],
-                "precision": dict_error_test['precision'],
-                "recall": dict_error_test['recall'],
-                "f1_score": dict_error_test['f1_score']
+                "precision": dict_error_valid['precision'],
+                "recall": dict_error_valid['recall'],
+                "f1_score": dict_error_valid['f1_score']
             }, 
             step=var_epoch)
             if var_epoch % 10 == 0:
                 print(f"--- Epoch {var_epoch}/{var_epochs} ---")
                 print(f"  Time: {time.time() - var_time_e0:.6f}s")
-                print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss Test: {var_loss_test.cpu():.6f}")
-                print(f"  Total Error Train: {dict_error_train['total_error']:.6f} | Total Error Test: {dict_error_test['total_error']:.6f}")
-                print(f"  Perfect Prediction % Train: {dict_error_train['perfect_prediction_percentage']:.6f} | Perfect Prediction % Test: {dict_error_test['perfect_prediction_percentage']:.6f}")
-                print(f"  Accuracy Train: {dict_error_train['accuracy']:.6f} | Accuracy Test: {dict_error_test['accuracy']:.6f}")
-                print(f"  Precision: {dict_error_test['precision']:.6f} | Recall: {dict_error_test['recall']:.6f} | F1 Score: {dict_error_test['f1_score']:.6f}")
+                print(f"  Loss Train: {var_loss_train.cpu():.6f} | Loss valid: {var_loss_valid.cpu():.6f}")
+                print(f"  Total Error Train: {dict_error_train['total_error']:.6f} | Total Error valid: {dict_error_valid['total_error']:.6f}")
+                print(f"  Perfect Prediction % Train: {dict_error_train['perfect_prediction_percentage']:.6f} | Perfect Prediction % valid: {dict_error_valid['perfect_prediction_percentage']:.6f}")
+                print(f"  Accuracy Train: {dict_error_train['accuracy']:.6f} | Accuracy valid: {dict_error_valid['accuracy']:.6f}")
+                print(f"  Precision: {dict_error_valid['precision']:.6f} | Recall: {dict_error_valid['recall']:.6f} | F1 Score: {dict_error_valid['f1_score']:.6f}")
                 print("-" * 30)
 
-        if (var_epoch > 0 and dict_error_test['perfect_prediction_percentage'] > var_best_PPP):
-            var_best_PPP = dict_error_test['perfect_prediction_percentage']
+        if (var_epoch > 0 and dict_error_valid['perfect_prediction_percentage'] > var_best_PPP):
+            var_best_PPP = dict_error_valid['perfect_prediction_percentage']
 
-            var_best_f1_score = dict_error_test['f1_score']
+            var_best_f1_score = dict_error_valid['f1_score']
             var_best_weight = deepcopy(model.state_dict())
             var_epoch_saved = var_epoch
 
