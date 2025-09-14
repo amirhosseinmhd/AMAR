@@ -20,7 +20,7 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 3,
+    "repeat": 8,
     ## path of data
     "path": {
 
@@ -54,7 +54,7 @@ preset = {
     "nn": {
         "lr": 5e-4,                                     # learning rate
         "epoch": 400,                                   # number of epochs
-        "batch_size":64,                              # batch size
+        "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
@@ -82,8 +82,8 @@ preset = {
         "n_attention_heads": 4,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.5,
-        "num_codes": 256,
-        "num_rvq_layers": 6,  # Number of RVQ layers (V+1 in the formula)
+        "num_codes": 128,
+        "num_rvq_layers": 4,  # Number of RVQ layers (V+1 in the formula)
         "PCA": False
 
 },
