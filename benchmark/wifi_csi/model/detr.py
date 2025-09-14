@@ -106,10 +106,13 @@ def run_that_detr(data_train_x,
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     data_x_mean = np.mean(data_train_x, axis=1)
-    pca = PCA(n_components=50)
-    pca.fit(data_x_mean)
-    pca_components = torch.from_numpy(pca.components_.T).float().to(device)
-
+    if preset["nn"]["PCA"]:
+        pca = PCA(n_components=50)
+        pca.fit(data_x_mean)
+        pca_components = torch.from_numpy(pca.components_.T).float()
+        print(" Using PCA embeddings: mapping 270 to PCA components")
+    else:
+        pca_components = None
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
@@ -139,8 +142,7 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
-                                    pca_embeddings=pca_components.to(torch.device("cpu"))),var_x_shape, as_strings=False)
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),var_x_shape, as_strings=False)
 
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
