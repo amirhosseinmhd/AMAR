@@ -487,25 +487,28 @@ def run_that_detrRVQ(data_train_x,
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
     data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
 
-    # K-means initialization for RVQ codebook (only for first layer)
-    print("Initializing RVQ codebook with K-means...")
-    feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
     
-    # Get a subset of data for initialization
-    init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
-    init_data, _ = next(iter(init_loader))
-    init_data = init_data.to(device)
-    
-    with torch.no_grad():
-        initial_embeddings = feature_extractor_for_init(init_data)
-    
-    # Flatten embeddings for KMeans
-    initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
-    
-    num_embeddings = preset["nn"]["num_codes"]
-    kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
-    codebook_initial_embeddings = None#torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+    if preset["nn"]["KMEANS_Initialization"]:
+        # K-means initialization for VQ-VAE codebook
+        print("Initializing codebook with K-means...")
+        feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
 
+        # Get a subset of data for initialization
+        init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
+        init_data, _ = next(iter(init_loader))
+        init_data = init_data.to(device)
+
+        with torch.no_grad():
+            initial_embeddings = feature_extractor_for_init(init_data)
+
+        # Flatten embeddings for KMeans
+        initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
+
+        num_embeddings = preset["nn"]["num_codes"]
+        kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
+        codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+    else:
+        codebook_initial_embeddings = None # Initialize codebook with random embeddings
     #
     ##
     ## ========================================= Train & Evaluate =========================================
@@ -591,7 +594,7 @@ def run_that_detrRVQ(data_train_x,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
-                                data_test_set=data_valid_set,
+                                data_valid_set=data_valid_set,
                                 var_threshold=preset["nn"]["threshold"],
                                 var_batch_size=preset["nn"]["batch_size"],
                                 var_epochs=preset["nn"]["epoch"],
