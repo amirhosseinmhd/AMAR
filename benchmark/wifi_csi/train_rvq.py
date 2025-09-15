@@ -150,7 +150,7 @@ def train(model: Module,
                 print(f"  Precision: {layer_metrics['precision']:.6f} | Recall: {layer_metrics['recall']:.6f} | F1 Score: {layer_metrics['f1_score']:.6f}")
                 print("-" * 30)
 
-        if (var_epoch > 0 and dict_error_valid['perfect_prediction_percentage'] > var_best_PPP):
+        if (var_epoch > 150 and dict_error_valid['perfect_prediction_percentage'] > var_best_PPP):
             var_best_PPP = dict_error_valid['perfect_prediction_percentage']
 
             var_best_f1_score = dict_error_valid['f1_score']
