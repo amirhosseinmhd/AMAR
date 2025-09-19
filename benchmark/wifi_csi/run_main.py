@@ -174,7 +174,64 @@ def run():
     result["data"] = preset["data"]
     result["nn"] = preset["nn"]
     #
+    print("\n" + "="*80)
+    print(f"EXPERIMENT RESULTS - Model: {var_model}, Task: {var_task}")
+    print("="*80)
+    
+    # Check if this is a layered result (like DETR) or single result
+    if isinstance(result, dict) and any(key.startswith('layer_') for key in result.keys() if isinstance(key, str)):
+        # This is a layered result (DETR models)
+        print("LAYERED MODEL RESULTS:")
+        for layer_key in sorted([k for k in result.keys() if isinstance(k, str) and k.startswith('layer_')]):
+            layer_results = result[layer_key]
+            print(f"\n{layer_key.upper()}:")
+            if 'avg_precision' in layer_results:
+                print(f"  Avg Precision: {layer_results['avg_precision']:.4f} ± {layer_results['se_precision']:.4f} (SE)")
+            if 'avg_recall' in layer_results:
+                print(f"  Avg Recall: {layer_results['avg_recall']:.4f} ± {layer_results['se_recall']:.4f} (SE)")
+            if 'avg_PPP' in layer_results:
+                print(f"  Avg Perfect Prediction %: {layer_results['avg_PPP']:.4f} ± {layer_results['se_PPP']:.4f} (SE)")
+            if 'avg_f1_score' in layer_results:
+                print(f"  Avg F1 Score: {layer_results['avg_f1_score']:.4f} ± {layer_results['se_f1_score']:.4f} (SE)")
+            if 'avg_accuracy' in layer_results:
+                print(f"  Avg Accuracy: {layer_results['avg_accuracy']:.4f} ± {layer_results['se_accuracy']:.4f} (SE)")
+            if 'avg_total_error' in layer_results:
+                print(f"  Avg Total Error: {layer_results['avg_total_error']:.4f} ± {layer_results['se_total_error']:.4f} (SE)")
+    else:
+        # This is a single-layer result (other models)
+        print("SINGLE MODEL RESULTS:")
+        if isinstance(result, dict):
+            # Check for aggregated metrics first (new format)
+            if 'avg_precision' in result:
+                print(f"  Avg Precision: {result['avg_precision']:.4f} ± {result['se_precision']:.4f} (SE)")
+            if 'avg_recall' in result:
+                print(f"  Avg Recall: {result['avg_recall']:.4f} ± {result['se_recall']:.4f} (SE)")
+            if 'avg_PPP' in result:
+                print(f"  Avg Perfect Prediction %: {result['avg_PPP']:.4f} ± {result['se_PPP']:.4f} (SE)")
+            if 'avg_f1_score' in result:
+                print(f"  Avg F1 Score: {result['avg_f1_score']:.4f} ± {result['se_f1_score']:.4f} (SE)")
+            if 'avg_accuracy' in result:
+                print(f"  Avg Accuracy: {result['avg_accuracy']:.4f} ± {result['se_accuracy']:.4f} (SE)")
+            if 'avg_total_error' in result:
+                print(f"  Avg Total Error: {result['avg_total_error']:.4f} ± {result['se_total_error']:.4f} (SE)")
+            
+            # Fall back to single iteration metrics (old format) if aggregated metrics not available
+            elif 'precision' in result:
+                print(f"  Precision: {result['precision']:.4f}")
+                if 'recall' in result:
+                    print(f"  Recall: {result['recall']:.4f}")
+                if 'perfect_prediction_percentage' in result:
+                    print(f"  Perfect Prediction %: {result['perfect_prediction_percentage']:.4f}")
+                if 'f1_score' in result:
+                    print(f"  F1 Score: {result['f1_score']:.4f}")
+                if 'accuracy' in result:
+                    print(f"  Accuracy: {result['accuracy']:.4f}")
+                if 'total_error' in result:
+                    print(f"  Total Error: {result['total_error']:.4f}")
+    
+    print("\nFull Result Details:")
     print(result)
+    print("="*80)
     #
     ## save results
     # var_file = open(preset["path"]["save"], 'w')

@@ -160,7 +160,7 @@ def run_that_detr(data_train_x,
             name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="test",
+            project="finding_hyperParameters",
             name= name_run +preset["wandb_name"] ,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -180,7 +180,7 @@ def run_that_detr(data_train_x,
                                     # pca_embeddings=pca_components
                                     ).to(device)
 
-        # model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
+        model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
         # model_detr.decoder = torch.compile(model_detr.decoder)        # wandb.watch(
         #     model_detr.feature_extractor,  # Directly target the CNN backbone
         #     log="all",  # Log gradients and parameters
@@ -301,23 +301,48 @@ def run_that_detr(data_train_x,
                   "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
 
 
+    # Calculate averages and standard errors for each layer
     for layer_idx_num, layer_idx in enumerate(layers_idxs):
+        # Calculate metrics with standard errors
+        ppp_array = np.array(result_ppp[layer_idx_num])
+        precision_array = np.array(result_precision[layer_idx_num])
+        recall_array = np.array(result_recall[layer_idx_num])
+        f1_array = np.array(result_f1_score[layer_idx_num])
+        accuracy_array = np.array(result_accuracy[layer_idx_num])
+        total_error_array = np.array(result_total_error[layer_idx_num])
+        
+        # Store results for this layer
+        all_layers_results[layer_idx] = {
+            'avg_PPP': float(np.mean(ppp_array)),
+            'avg_precision': float(np.mean(precision_array)),
+            'avg_recall': float(np.mean(recall_array)),
+            'avg_f1_score': float(np.mean(f1_array)),
+            'avg_accuracy': float(np.mean(accuracy_array)),
+            'avg_total_error': float(np.mean(total_error_array)),
+            'std_PPP': float(np.std(ppp_array, ddof=1)) if len(ppp_array) > 1 else 0.0,
+            'std_precision': float(np.std(precision_array, ddof=1)) if len(precision_array) > 1 else 0.0,
+            'std_recall': float(np.std(recall_array, ddof=1)) if len(recall_array) > 1 else 0.0,
+            'std_f1_score': float(np.std(f1_array, ddof=1)) if len(f1_array) > 1 else 0.0,
+            'std_accuracy': float(np.std(accuracy_array, ddof=1)) if len(accuracy_array) > 1 else 0.0,
+            'std_total_error': float(np.std(total_error_array, ddof=1)) if len(total_error_array) > 1 else 0.0,
+            'se_PPP': float(np.std(ppp_array, ddof=1) / np.sqrt(len(ppp_array))) if len(ppp_array) > 1 else 0.0,
+            'se_precision': float(np.std(precision_array, ddof=1) / np.sqrt(len(precision_array))) if len(precision_array) > 1 else 0.0,
+            'se_recall': float(np.std(recall_array, ddof=1) / np.sqrt(len(recall_array))) if len(recall_array) > 1 else 0.0,
+            'se_f1_score': float(np.std(f1_array, ddof=1) / np.sqrt(len(f1_array))) if len(f1_array) > 1 else 0.0,
+            'se_accuracy': float(np.std(accuracy_array, ddof=1) / np.sqrt(len(accuracy_array))) if len(accuracy_array) > 1 else 0.0,
+            'se_total_error': float(np.std(total_error_array, ddof=1) / np.sqrt(len(total_error_array))) if len(total_error_array) > 1 else 0.0
+        }
+        
         wandb.log({
-            f"test_results/{layer_idx}/avg_PPP": sum(result_ppp[layer_idx_num]) / len(result_ppp[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_train_time": sum(result_time_train[layer_idx_num]) / len(
-                result_time_train[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_test_time": sum(result_time_test[layer_idx_num]) / len(
-                result_time_test[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_total_error": sum(result_total_error[layer_idx_num]) / len(
-                result_total_error[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_precision": sum(result_precision[layer_idx_num]) / len(
-                result_precision[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_recall": sum(result_recall[layer_idx_num]) / len(result_recall[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_f1_score": sum(result_f1_score[layer_idx_num]) / len(result_f1_score[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_count_error": sum(result_avg_count_error[layer_idx_num]) / len(
-                result_avg_count_error[layer_idx_num]),
-            f"test_results/{layer_idx}/avg_accuracy": sum(result_accuracy[layer_idx_num]) / len(
-                result_accuracy[layer_idx_num])
+            f"test_results/{layer_idx}/avg_PPP": all_layers_results[layer_idx]['avg_PPP'],
+            f"test_results/{layer_idx}/avg_train_time": sum(result_time_train[layer_idx_num]) / len(result_time_train[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_test_time": sum(result_time_test[layer_idx_num]) / len(result_time_test[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_total_error": all_layers_results[layer_idx]['avg_total_error'],
+            f"test_results/{layer_idx}/avg_precision": all_layers_results[layer_idx]['avg_precision'],
+            f"test_results/{layer_idx}/avg_recall": all_layers_results[layer_idx]['avg_recall'],
+            f"test_results/{layer_idx}/avg_f1_score": all_layers_results[layer_idx]['avg_f1_score'],
+            f"test_results/{layer_idx}/avg_count_error": sum(result_avg_count_error[layer_idx_num]) / len(result_avg_count_error[layer_idx_num]),
+            f"test_results/{layer_idx}/avg_accuracy": all_layers_results[layer_idx]['avg_accuracy']
         })  # Use an even larger offset for averages
 
     # Use the last layer for visualization and final results
