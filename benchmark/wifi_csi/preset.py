@@ -82,8 +82,9 @@ preset = {
         "n_attention_heads": 4,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.25,
-        "num_codes": 16,
+        "num_codes": 64,
         "num_rvq_layers":4,  # Number of RVQ layers (V+1 in the formula)
+        "quantization_dropout": 0.2,  # Dropout rate for quantization layers
         "PCA": False
 
 },

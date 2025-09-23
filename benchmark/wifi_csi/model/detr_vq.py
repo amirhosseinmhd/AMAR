@@ -47,7 +47,8 @@ class DETR_MultiUser_RVQ(nn.Module):
             num_embeddings=num_embeddings,
             embedding_dim=preset["nn"]["d_embedding"],
             commitment_cost=commitment_cost,
-            initial_embeddings_first_layer=None
+            initial_embeddings_first_layer=None,
+            quantization_dropout=preset["nn"].get("quantization_dropout", 0.2),
         )
         
         # Transformer Encoder

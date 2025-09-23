@@ -62,12 +62,13 @@ class ResidualVectorQuantizer(nn.Module):
     Uses multiple quantization layers to quantize residuals progressively.
     """
     def __init__(self, num_layers, num_embeddings, embedding_dim, commitment_cost, 
-                 initial_embeddings_first_layer=None):
+                 initial_embeddings_first_layer=None, quantization_dropout=0.2):
         super(ResidualVectorQuantizer, self).__init__()
         self.num_layers = num_layers
         self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
         self.commitment_cost = commitment_cost
+        self.quantization_dropout = quantization_dropout
         
         # Create multiple VQ layers
         self.vq_layers = nn.ModuleList()
@@ -91,29 +92,62 @@ class ResidualVectorQuantizer(nn.Module):
             )
             self.vq_layers.append(vq_layer)
     
+    def _get_num_active_layers(self):
+        """
+        Determines the number of active quantization layers during training.
+        Uses quantization dropout to randomly disable the last 0 to V layers.
+        
+        Strategy: With probability q, randomly choose to use 1 to num_layers layers.
+        This forces early layers to be more robust and prevents over-dependence on later layers.
+        
+        Returns:
+            int: Number of active layers (always at least 1)
+        """
+        if not self.training or self.quantization_dropout == 0.0:
+            return self.num_layers
+        
+        # With probability q, apply quantization dropout
+        if torch.rand(1).item() < self.quantization_dropout:
+            # Randomly select number of layers to keep (1 to num_layers)
+            # This implements the "disable last 0 to V layers" strategy
+            num_layers_to_drop = torch.randint(0, self.num_layers, (1,)).item()
+            num_active = self.num_layers - num_layers_to_drop
+            # Ensure we always keep at least 1 layer
+            num_active = max(1, num_active)
+        else:
+            # Use all layers
+            num_active = self.num_layers
+            
+        return num_active
+    
     def forward(self, inputs):
         """
         Args:
             inputs: Input tensor of shape (batch_size, seq_len, embedding_dim)
         
         Returns:
-            quantized_st: Straight-through quantized features (sum of all layers)
-            quantized: Detached quantized features (sum of all layers)
-            all_indices: List of indices from each quantization layer
-            all_quantized_layers: List of quantized outputs from each layer
+            quantized_st: Straight-through quantized features (sum of active layers)
+            quantized: Detached quantized features (sum of active layers)
+            all_indices: List of indices from each active quantization layer
+            all_quantized_layers: List of quantized outputs from each active layer
         """
         batch_size, seq_len, _ = inputs.shape
+        
+        # Determine number of active layers (with quantization dropout during training)
+        num_active_layers = self._get_num_active_layers()
         
         # Initialize residual with input features
         residual = inputs
         
-        # Store outputs from each layer
+        # Store outputs from each active layer
         all_quantized_st = []
         all_quantized = []
         all_indices = []
         
-        # Progressive residual quantization
-        for layer_idx, vq_layer in enumerate(self.vq_layers):
+        # Progressive residual quantization (only through active layers)
+        for layer_idx in range(num_active_layers):
+            vq_layer = self.vq_layers[layer_idx]
+            
             # Quantize current residual
             quantized_st, quantized, indices = vq_layer(residual)
             
@@ -123,10 +157,10 @@ class ResidualVectorQuantizer(nn.Module):
             all_indices.append(indices)
             
             # Update residual for next layer (subtract quantized representation)
-            if layer_idx < self.num_layers - 1:  # Don't compute residual for last layer
+            if layer_idx < num_active_layers - 1:  # Don't compute residual for last active layer
                 residual = residual - quantized.detach()
         
-        # Sum all quantized representations
+        # Sum all quantized representations from active layers
         final_quantized_st = torch.stack(all_quantized_st, dim=0).sum(dim=0)
         final_quantized = torch.stack(all_quantized, dim=0).sum(dim=0)
         
@@ -134,28 +168,47 @@ class ResidualVectorQuantizer(nn.Module):
     
     def compute_loss(self, inputs, all_quantized_layers):
         """
-        Compute total VQ loss across all layers.
+        Compute total VQ loss across all active layers.
         
         Args:
             inputs: Original input features
-            all_quantized_layers: List of quantized outputs from each layer
+            all_quantized_layers: List of quantized outputs from each active layer
         
         Returns:
-            total_loss: Sum of losses from all quantization layers
+            total_loss: Sum of losses from all active quantization layers
         """
         total_loss = 0.0
         residual = inputs
+        num_active_layers = len(all_quantized_layers)
         
-        for layer_idx, (vq_layer, quantized) in enumerate(zip(self.vq_layers, all_quantized_layers)):
+        for layer_idx in range(num_active_layers):
+            vq_layer = self.vq_layers[layer_idx]
+            quantized = all_quantized_layers[layer_idx]
+            
             # Compute loss for current layer
             layer_loss = vq_layer.compute_loss(residual, quantized)
             total_loss += layer_loss
             
             # Update residual for next layer
-            if layer_idx < self.num_layers - 1:
+            if layer_idx < num_active_layers - 1:
                 residual = residual - quantized.detach()
         
         return total_loss
+
+    def set_quantization_dropout(self, dropout_rate):
+        """
+        Set the quantization dropout rate.
+        
+        Args:
+            dropout_rate (float): Dropout probability in [0, 1]
+        """
+        if not 0.0 <= dropout_rate <= 1.0:
+            raise ValueError(f"Dropout rate must be in [0, 1], got {dropout_rate}")
+        self.quantization_dropout = dropout_rate
+    
+    def get_quantization_dropout(self):
+        """Get the current quantization dropout rate."""
+        return self.quantization_dropout
 
 class PCAFeatureExtractor(nn.Module):
     def __init__(self, input_channels=270, output_channels=16, pca_components=None):
