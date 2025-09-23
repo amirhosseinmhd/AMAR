@@ -24,14 +24,14 @@ preset = {
     ## path of data
     "path": {
 
-        "data_x": "/home/amirmhd/Documents/multi_modal_CSI/dataset/wifi_csi/amp",
-        "data_y": "/home/amirmhd/Documents/multi_modal_CSI/dataset/annotation.csv",
+        # "data_x": "/home/amirmhd/Documents/multi_modal_CSI/dataset/wifi_csi/amp",
+        # "data_y": "/home/amirmhd/Documents/multi_modal_CSI/dataset/annotation.csv",
         # "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",  # path of annotation file
         # "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",  # path of annotation file
-        # "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
-        # "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
+        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
+        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -54,6 +54,7 @@ preset = {
     "nn": {
         "lr": 5e-4,                                     # learning rate
         "epoch": 300,                                   # number of epochs
+        "batch_size":16,                              # batch size
         "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {

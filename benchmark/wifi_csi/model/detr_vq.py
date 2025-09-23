@@ -236,7 +236,7 @@ def run_that_detrRVQ(data_train_x,
                                     codebook_initial_embeddings=codebook_initial_embeddings if not codebook_initial_embeddings else codebook_initial_embeddings.to(device),
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 
-        model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
+        # model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
         #
         ##
         optimizer = torch.optim.AdamW(model_detrRVQ.parameters(),
