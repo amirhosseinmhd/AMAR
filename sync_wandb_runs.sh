@@ -32,10 +32,10 @@ fi
 echo ""
 
 # Check for wandb directory
-WANDB_DIR="wandb"
+WANDB_DIR="/home/amirmhd/scratch/wandb"
 if [ ! -d "$WANDB_DIR" ]; then
-    echo "❌ Error: wandb directory not found in current location: $(pwd)"
-    echo "Please run this script from the project directory containing the wandb folder"
+    echo "❌ Error: wandb directory not found in scratch directory: $WANDB_DIR"
+    echo "Wandb files should be saved to scratch directory by the compute jobs"
     exit 1
 fi
 

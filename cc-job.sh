@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --mem=64G
 #SBATCH --nodes=1
-#SBATCH --time=50:0:0
+#SBATCH --time=12:0:0
 #SBATCH --gpus-per-node=a100:1  # or whatever GPU type is available
 #SBATCH --mail-user=mdi.amirhossein@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --job-name=csi_job
-#SBATCH --output=experiment_results/prev_model-%j.out
+#SBATCH --output=experiment_results/final-%j.out
 
 mkdir -p $PROJECT_DIR/experiment_results
 
@@ -51,8 +51,8 @@ echo "Python version: $(python --version)"
 export ENVIRONMENTS_EXP=${ENVIRONMENTS_EXP:-classroom}
 export MODEL_TYPE=${MODEL_TYPE:-DETR}
 export WANDB_MODE=${WANDB_MODE:-offline}
-# export NUM_EPOCHS=20
-
+export NUM_CODES=${NUM_CODES:-128}
+export NUM_RVQ_LAYERS=${NUM_RVQ_LAYERS:-4}
 # export TOKEN_LENGTH=100
 # export EMBEDDING_DIM=16
 # export LABEL_SMOOTHING=0.2 
@@ -75,12 +75,12 @@ if [ -d "results" ]; then
     cp -r results $PROJECT_DIR/$OUTFILE_NAME
 fi
 
-# Copy wandb offline runs back to project directory
+# Copy wandb offline runs back to scratch directory
 if [ -d "wandb" ]; then
     echo "Copying wandb offline runs..."
-    mkdir -p $PROJECT_DIR/wandb
-    cp -r wandb/* $PROJECT_DIR/wandb/
-    echo "Wandb files copied to $PROJECT_DIR/wandb/"
+    mkdir -p /home/amirmhd/scratch/wandb
+    cp -r wandb/* /home/amirmhd/scratch/wandb/
+    echo "Wandb files copied to /home/amirmhd/scratch/wandb/"
 else
     echo "No wandb directory found to copy"
 fi
