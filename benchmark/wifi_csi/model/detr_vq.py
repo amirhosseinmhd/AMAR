@@ -212,7 +212,7 @@ def run_that_detrRVQ(data_train_x,
             name_run = f"DETR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="RVQ_LAYERS",
+            project="FINAL_RVQ",
             name= name_run + preset["wandb_name"],
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process

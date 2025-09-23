@@ -24,14 +24,14 @@ preset = {
     ## path of data
     "path": {
 
-        # "data_x": "/home/amirmhd/Documents/multi_modal_CSI/dataset/wifi_csi/amp",
-        # "data_y": "/home/amirmhd/Documents/multi_modal_CSI/dataset/annotation.csv",
+        "data_x": "/home/amirmhd/Documents/multi_modal_CSI/dataset/wifi_csi/amp",
+        "data_y": "/home/amirmhd/Documents/multi_modal_CSI/dataset/annotation.csv",
         # "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",  # path of annotation file
         # "data_x": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/wifi_csi/amp",  # directory of CSI amplitude files
         # "data_y": "/Users/amirmhd/Documents/MASc/Research/Data/Wimans/annotation.csv",  # path of annotation file
-        "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
-        "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
+        # "data_x": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/wifi_csi/amp",  # directory of CSI amplitude files
+        # "data_y": "/home/amirmhd/projects/def-hinat/amirmhd/Dataset/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -39,7 +39,7 @@ preset = {
     "data": {
         "num_users": ["0","1", "2", "3", "4", "5"] ,   # select number(s) of users, (e.g., ["0", "1"], ["2", "3", "4", "5"])
         "wifi_band": ["5"],                           # select WiFi band(s) (e.g., ["2.4"], ["5"], ["2.4", "5"])
-        "environment": ["classroom"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
+        "environment": ["meeting_room"],                   # select environment(s) (e.g., ["classroom"], ["meeting_room"], ["empty_room"])
         "length": 3000,                                 # default length of CSI
     },
     "data_band2": {
@@ -54,7 +54,7 @@ preset = {
     "nn": {
         "lr": 5e-4,                                     # learning rate
         "epoch": 300,                                   # number of epochs
-        "batch_size":64,                              # batch size
+        "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
@@ -82,8 +82,8 @@ preset = {
         "n_attention_heads": 4,
         "query_dropout_rate": 0.0,
         "commitment_cost": 0.25,
-        "num_codes": 64,
-        "num_rvq_layers":1,  # Number of RVQ layers (V+1 in the formula)
+        "num_codes": 16,
+        "num_rvq_layers":4,  # Number of RVQ layers (V+1 in the formula)
         "PCA": False
 
 },
@@ -151,3 +151,4 @@ preset = {
 }
 
 
+preset["wandb_name"] = "N_LAYERS_" + str(preset["nn"]["num_rvq_layers"]) + "Num_Codes_" + str(preset["nn"]["num_codes"])
