@@ -7,7 +7,7 @@ import json
 import wandb
 import os
 import re
-
+import time
 
 # def load_model_components(model, load_path, lr, scenario="full", device=None):
 #     """
@@ -312,7 +312,7 @@ def save_model_components(preset, model):
     # Create save directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     save_dir = os.path.join(
-        preset["path"].get("models_dir", "./saved_models"),
+        preset.get("saving_path", "./saved_models"),
         f"jepa_sup_{'+'.join(preset['data']['environment'])}_{timestamp}"
     )
     os.makedirs(save_dir, exist_ok=True)
@@ -327,6 +327,7 @@ def save_model_components(preset, model):
 
     print(f"💾 Model saved to: {model_path}")
     return model_path
+
 def error_per_number_person(y_pred, y_true):
     """
     Args:

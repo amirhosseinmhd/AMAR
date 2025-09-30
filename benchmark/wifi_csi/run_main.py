@@ -153,7 +153,7 @@ def run():
 
     elif var_model == "JEPA": run_model = run_JEPA
 
-    elif var_model == "DETR_VQ": run_model = run_that_detrVQ
+    # elif var_model == "DETR_VQ": run_model = run_that_detrVQ
 
     elif var_model == "DETR_RVQ": run_model = run_that_detrRVQ
 

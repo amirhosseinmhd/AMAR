@@ -239,10 +239,19 @@ def run_that_detrRVQ(data_train_x,
         # model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
         #
         ##
-        optimizer = torch.optim.AdamW(model_detrRVQ.parameters(),
+        if preset.get("pretrained_path"):
+            model_detrRVQ, param_groups = load_model_components(
+                model=model_detrRVQ,
+                load_path=preset["pretrained_path"],
+                lr = preset["nn"]["lr"],
+                scenario=preset.get("transfer_scenario"),
+                device=device
+            )
+            optimizer = torch.optim.Adam(param_groups)
+        else:
+            optimizer = torch.optim.Adam(model_detrRVQ.parameters(),
                                          lr=preset["nn"]["lr"],
                                          weight_decay=preset["nn"]["weight_decay"])
-
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
             aux_loss_weight=preset["nn"]["loss"]["aux_loss_weight"],
