@@ -213,7 +213,7 @@ def run_that_detrRVQ(data_train_x,
             name_run = f"DETR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="FINAL_RVQ",
+            project="REALREAL_FINAL_RVQ",
             name= name_run + preset["wandb_name"],
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -239,6 +239,16 @@ def run_that_detrRVQ(data_train_x,
         # model_detrRVQ.feature_extractor = torch.compile(model_detrRVQ.feature_extractor)
         #
         ##
+        # Separate learning rates: 0.1x for codebook, 1x for other parameters
+        codebook_params = []
+        other_params = []
+        
+        for name, param in model_detrRVQ.named_parameters():
+            if 'rvq_layer' in name and 'embedding.weight' in name:
+                codebook_params.append(param)
+            else:
+                other_params.append(param)
+        
         if preset.get("pretrained_path"):
             model_detrRVQ, param_groups = load_model_components(
                 model=model_detrRVQ,
@@ -247,11 +257,19 @@ def run_that_detrRVQ(data_train_x,
                 scenario=preset.get("transfer_scenario"),
                 device=device
             )
-            optimizer = torch.optim.Adam(param_groups)
+            # Update param_groups to include separate learning rate for codebook
+            # Note: This assumes load_model_components returns standard param_groups
+            # We'll need to add codebook-specific groups
+            param_groups_with_codebook = param_groups + [
+                {'params': codebook_params, 'lr': preset["nn"]["lr"] * 0.1, 'weight_decay': preset["nn"]["weight_decay"]}
+            ]
+            optimizer = torch.optim.Adam(param_groups_with_codebook)
         else:
-            optimizer = torch.optim.Adam(model_detrRVQ.parameters(),
-                                         lr=preset["nn"]["lr"],
-                                         weight_decay=preset["nn"]["weight_decay"])
+            param_groups = [
+                {'params': other_params, 'lr': preset["nn"]["lr"], 'weight_decay': preset["nn"]["weight_decay"]},
+                {'params': codebook_params, 'lr': preset["nn"]["lr"] * 0.1, 'weight_decay': preset["nn"]["weight_decay"]}
+            ]
+            optimizer = torch.optim.Adam(param_groups)
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
             aux_loss_weight=preset["nn"]["loss"]["aux_loss_weight"],
