@@ -372,7 +372,7 @@ def run_that(data_train_x,
         name_run = f"BCE_THAT_{var_r}_" + "_".join(preset["data"]["environment"])
 
         run = wandb.init(
-            project="final_results",
+            project="FINAL_FINAL_EEEFINAL",
             name= name_run,
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
@@ -409,7 +409,7 @@ def run_that(data_train_x,
                                 optimizer = optimizer,
                                 loss = loss,
                                 data_train_set = data_train_set,
-                                data_test_set = data_valid_set,
+                                data_valid_set = data_valid_set,
                                 var_threshold = preset["nn"]["threshold"],
                                 var_batch_size = preset["nn"]["batch_size"],
                                 var_epochs = preset["nn"]["epoch"],
@@ -471,14 +471,42 @@ def run_that(data_train_x,
         result_recall.append(dict_true_acc['recall'])
         result_f1_score.append(dict_true_acc['f1_score'])
 
+    # Calculate aggregated metrics with standard errors
+    ppp_array = np.array(result_accuracy)  # result_accuracy contains PPP values
+    precision_array = np.array(result_precision)
+    recall_array = np.array(result_recall)
+    f1_array = np.array(result_f1_score)
+    total_error_array = np.array(result_total_error)
+    
+    # Create result dictionary with averaged metrics and standard errors
+    aggregated_result = {
+        'avg_PPP': float(np.mean(ppp_array)),
+        'avg_precision': float(np.mean(precision_array)),
+        'avg_recall': float(np.mean(recall_array)),
+        'avg_f1_score': float(np.mean(f1_array)),
+        'avg_total_error': float(np.mean(total_error_array)),
+        'std_PPP': float(np.std(ppp_array, ddof=1)) if len(ppp_array) > 1 else 0.0,
+        'std_precision': float(np.std(precision_array, ddof=1)) if len(precision_array) > 1 else 0.0,
+        'std_recall': float(np.std(recall_array, ddof=1)) if len(recall_array) > 1 else 0.0,
+        'std_f1_score': float(np.std(f1_array, ddof=1)) if len(f1_array) > 1 else 0.0,
+        'std_total_error': float(np.std(total_error_array, ddof=1)) if len(total_error_array) > 1 else 0.0,
+        'se_PPP': float(np.std(ppp_array, ddof=1) / np.sqrt(len(ppp_array))) if len(ppp_array) > 1 else 0.0,
+        'se_precision': float(np.std(precision_array, ddof=1) / np.sqrt(len(precision_array))) if len(precision_array) > 1 else 0.0,
+        'se_recall': float(np.std(recall_array, ddof=1) / np.sqrt(len(recall_array))) if len(recall_array) > 1 else 0.0,
+        'se_f1_score': float(np.std(f1_array, ddof=1) / np.sqrt(len(f1_array))) if len(f1_array) > 1 else 0.0,
+        'se_total_error': float(np.std(total_error_array, ddof=1) / np.sqrt(len(total_error_array))) if len(total_error_array) > 1 else 0.0,
+        'avg_train_time': sum(result_time_train) / len(result_time_train),
+        'avg_test_time': sum(result_time_test) / len(result_time_test),
+    }
+    
     wandb.log({
-        "avg_accuracy": sum(result_accuracy) / len(result_accuracy),
-        "avg_train_time": sum(result_time_train) / len(result_time_train),
-        "avg_test_time": sum(result_time_test) / len(result_time_test),
-        "avg_total_error": sum(result_total_error) / len(result_total_error),
-        "avg_precision": sum(result_precision) / len(result_precision),
-        "avg_recall": sum(result_recall) / len(result_recall),
-        "avg_f1_score": sum(result_f1_score) / len(result_f1_score),
+        "avg_accuracy": aggregated_result['avg_PPP'],
+        "avg_train_time": aggregated_result['avg_train_time'],
+        "avg_test_time": aggregated_result['avg_test_time'],
+        "avg_total_error": aggregated_result['avg_total_error'],
+        "avg_precision": aggregated_result['avg_precision'],
+        "avg_recall": aggregated_result['avg_recall'],
+        "avg_f1_score": aggregated_result['avg_f1_score'],
     })
     viz_stats = visualize_model_performance(
         y_pred=predict_test_y,
@@ -496,4 +524,4 @@ def run_that(data_train_x,
     print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
 
     wandb.finish()
-    return dict_true_acc
+    return aggregated_result
