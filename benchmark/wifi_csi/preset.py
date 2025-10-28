@@ -55,7 +55,6 @@ preset = {
         "lr": 5e-4,                                     # learning rate
         "epoch": 300,                                   # number of epochs
         "batch_size":16,                              # batch size
-        "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
             "type": "cosine_warmup",  # type of scheduler
@@ -68,24 +67,24 @@ preset = {
             "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
-            "label_smoothing": 0.05,  # label smoothing factor
+            "label_smoothing": 0.2,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
         "KMEANS_Initialization": False,
         "cross_attention_temp": 1,
         "weight_decay": 1e-4,
-        "num_obj_queries": 5,
+        "num_obj_queries": 6,
         "num_decoder_layers":6,
         "dim_FFN": 512,
         "token_length": 188, #74
         "d_embedding": 64,
         "n_layers_encoder":4,
         "n_attention_heads": 4,
-        "query_dropout_rate": 0.0,
-        "commitment_cost": 0.25,
-        "num_codes": 64,
+        "query_dropout_rate": 0,
+        "commitment_cost": 0.5,
+        "num_codes": 16,
         "num_rvq_layers":4,  # Number of RVQ layers (V+1 in the formula)
-        "quantization_dropout": 0.2,  # Dropout rate for quantization layers
+        "quantization_dropout": 0.3,  # Dropout rate for quantization layers
         "PCA": False
 
 },
