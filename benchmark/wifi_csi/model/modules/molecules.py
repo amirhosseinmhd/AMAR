@@ -1,22 +1,19 @@
 import math
 from torch import nn
 import torch
-from model.modules.elements import DepthwiseSeparableConv, DilatedConvBlock, Dilated_Blocks
+from model.modules.elements import DepthwiseSeparableConv, DilatedConvBlock
 from preset import preset
 import torch.nn.functional as F
 
 class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost, initial_embeddings=None):
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost):
         super(VectorQuantizer, self).__init__()
         self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
         self.commitment_cost = commitment_cost
         
         self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
-        if initial_embeddings is not None:
-            self.embedding.weight.data.copy_(initial_embeddings)
-        else:
-            self.embedding.weight.data.uniform_(-1/self.num_embeddings, 1/self.num_embeddings)
+        self.embedding.weight.data.uniform_(-1/self.num_embeddings, 1/self.num_embeddings)
 
     def forward(self, inputs):
 
@@ -62,7 +59,7 @@ class ResidualVectorQuantizer(nn.Module):
     Uses multiple quantization layers to quantize residuals progressively.
     """
     def __init__(self, num_layers, num_embeddings, embedding_dim, commitment_cost, 
-                 initial_embeddings_first_layer=None, quantization_dropout=0.2):
+                 quantization_dropout=0.2):
         super(ResidualVectorQuantizer, self).__init__()
         self.num_layers = num_layers
         self.embedding_dim = embedding_dim
@@ -73,22 +70,12 @@ class ResidualVectorQuantizer(nn.Module):
         # Create multiple VQ layers
         self.vq_layers = nn.ModuleList()
         
-        # First layer with optional K-means initialization
-        first_vq = VectorQuantizer(
-            num_embeddings=num_embeddings,
-            embedding_dim=embedding_dim,
-            commitment_cost=commitment_cost,
-            initial_embeddings=initial_embeddings_first_layer
-        )
-        self.vq_layers.append(first_vq)
-        
-        # Additional layers with random initialization
-        for _ in range(1, num_layers):
+        # All layers with random initialization
+        for _ in range(num_layers):
             vq_layer = VectorQuantizer(
                 num_embeddings=num_embeddings,
                 embedding_dim=embedding_dim,
-                commitment_cost=commitment_cost,
-                initial_embeddings=None  # Random initialization for residual layers
+                commitment_cost=commitment_cost
             )
             self.vq_layers.append(vq_layer)
     
@@ -256,12 +243,6 @@ class Backbone(nn.Module):
             stride=2  # Combined stride for more compression
         )
 
-        # # 5. Parallel dilated convolutions (no reduction in any dimension)
-        # self.parallel_dilated_blocks = Dilated_Blocks(output_channels)
-        # self.bn_parallel = nn.BatchNorm1d(output_channels)
-        # self.relu_parallel = nn.ReLU()
-
-        # Removed final_reduction_conv as requested
 
     def forward(self, x):
         # Apply PCA replacement
@@ -283,6 +264,7 @@ class Backbone(nn.Module):
         x = self.ds_conv2(x)
 
         return x.permute(0, 2, 1)
+
 class FixedPositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(FixedPositionalEncoding, self).__init__()
@@ -304,167 +286,6 @@ class FixedPositionalEncoding(nn.Module):
         if indices is None:
             raise ValueError('indices must not be None')
         return self.pe[0, indices, :]
-
-
-
-
-class Predictor(nn.Module):
-    def __init__(self, preset):
-        super().__init__()
-        self.encoder_d_model = preset["nn"]["d_embedding"]
-        self.predictor_d_model = preset["jepa"]["predictor_d_model"]
-        self.max_total_tokens_in_view = preset["jepa"]["num_segments_total_view"]
-
-        # Learnable shared mask token
-        self.mask_token = nn.Parameter(torch.randn(1, 1, self.predictor_d_model))
-
-        # Projection layers
-        self.input_proj = nn.Linear(self.encoder_d_model, self.predictor_d_model)
-        self.output_proj = nn.Linear(self.predictor_d_model, self.encoder_d_model)
-
-        # Positional embedding
-        # HERE WE Want TO BORROW FROM CONTEXT ENCODER!!!!!#########################
-        # self.pos_encoder = nn.Embedding(self.max_total_tokens_in_view, self.predictor_d_model)
-        self.shared_pos_encoder = None
-
-        # Transformer encoder
-        predictor_encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.predictor_d_model,
-            nhead=preset["jepa"]["predictor_attention_heads"],
-            batch_first=True,
-            dropout=0.1
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            predictor_encoder_layer,
-            num_layers=preset["jepa"]["predictor_layers"],
-        )
-
-        # Layer norms
-        self.layer_norm_input = nn.LayerNorm(self.predictor_d_model)
-        self.layer_norm_output = nn.LayerNorm(self.encoder_d_model)
-        # Project positional embeddings from encoder dimension to predictor dimension
-        self.pos_proj = nn.Linear(self.encoder_d_model, self.predictor_d_model)
-
-    def set_shared_pos_encoder(self, encoder_pos_layer):
-        """
-        Set reference to the encoder's positional embedding layer.
-
-        Args:
-            encoder_pos_layer: The nn.Embedding layer from the context encoder
-        """
-        self.shared_pos_encoder = encoder_pos_layer
-
-
-
-    def get_target_pos_embedding(self, target_token_indices):
-        """
-        Get positional embeddings from shared encoder and project to predictor dimension.
-        Args:
-            target_token_indices: Shape (batch_size, num_blocks, num_target_tokens)
-        Returns:
-            target_pos_embeddings: Shape (batch_size, num_blocks, num_target_tokens, predictor_d_model)
-        """
-        if self.shared_pos_encoder is None:
-            raise ValueError("Shared positional encoder not set. Call set_shared_pos_encoder() first.")
-
-        batch_size, num_blocks, num_target_tokens = target_token_indices.shape
-
-        # Reshape to flat tensor for embedding lookup
-        flat_indices = target_token_indices.reshape(-1)
-
-        # Get positional embeddings from shared encoder (in encoder dimension)
-        flat_pos_embeddings = self.shared_pos_encoder(flat_indices)
-        # Shape: (B*num_blocks*num_target_tokens, encoder_d_model)
-
-        # Project to predictor dimension
-        flat_pos_embeddings_proj = self.pos_proj(flat_pos_embeddings)
-        # Shape: (B*num_blocks*num_target_tokens, predictor_d_model)
-
-        # Reshape back to preserve block structure
-        target_pos_embeddings = flat_pos_embeddings_proj.reshape(
-            batch_size, num_blocks, num_target_tokens, self.predictor_d_model
-        )
-        return target_pos_embeddings
-
-
-    def forward(self, z_context_online, context_mask, target_token_indices):
-        """
-        Args:
-            z_context_online (torch.Tensor): Encoded context tokens from the online encoder.
-                                             Shape: (batch_size, num_context_tokens, encoder_d_model).
-            context_mask (torch.Tensor): Boolean mask for z_context_online true for places that we need to ignore in context
-                                        Shape: (batch_size, num_context_tokens).
-            target_token_indices (torch.Tensor): The original absolute indices of the tokens to be predicted.
-                                                 Shape: (batch_size, num_blocks, num_target_tokens).
-
-        Returns:
-            torch.Tensor: The predicted token representations.
-                          Shape: (batch_size, num_blocks, num_target_tokens, encoder_d_model).
-        """
-        batch_size, num_blocks, num_target_tokens = target_token_indices.shape
-
-        # Step 1: Get positional embeddings for all target blocks
-        target_pos_embeddings = self.get_target_pos_embedding(target_token_indices)
-        # Shape: (B, num_blocks, num_target_tokens, predictor_dim)
-
-        # Step 2: Project context to predictor dimension and apply layer norm
-        projected_context = self.input_proj(z_context_online)  # Shape: (B, num_context, predictor_dim)
-        projected_context = self.layer_norm_input(projected_context)
-
-        # Step 3: Prepare mask token (shared across all blocks)
-        # Note: We'll expand this per block to avoid memory issues with large num_blocks
-
-        # Initialize output tensor
-        predicted_targets = torch.zeros(
-            batch_size, num_blocks, num_target_tokens, self.encoder_d_model,
-            device=z_context_online.device, dtype=z_context_online.dtype
-        )
-
-        # Process each target block separately
-        for block_idx in range(num_blocks):
-            # Step 4: Get positional embeddings for current block
-            target_pos_embeddings_block = target_pos_embeddings[:, block_idx, :, :]
-            # Shape: (B, num_target_tokens, predictor_dim)
-
-            # Step 5: Create query tokens (mask token + positional embeddings)
-            mask_tokens = self.mask_token.expand(batch_size, num_target_tokens, self.predictor_d_model)
-            query_tokens = mask_tokens + target_pos_embeddings_block
-            # Shape: (B, num_target_tokens, predictor_dim)
-
-            # Step 6: Concatenate context and query tokens
-            combined_sequence = torch.cat([projected_context, query_tokens], dim=1)
-            # Shape: (B, num_context + num_target_tokens, predictor_dim)
-
-            # Step 7: Create combined attention mask
-            query_padding_mask = torch.full(
-                (batch_size, num_target_tokens),
-                fill_value=False,
-                device=context_mask.device,
-                dtype=context_mask.dtype
-            )
-            combined_mask = torch.cat([context_mask, query_padding_mask], dim=1)
-            # Shape: (B, num_context + num_target_tokens)
-
-            # Step 8: Apply transformer encoder
-            predictor_output = self.transformer_encoder(
-                src=combined_sequence,
-                src_key_padding_mask=combined_mask
-            )
-            # Shape: (B, num_context + num_target_tokens, predictor_dim)
-
-            # Step 9: Extract predictions for query tokens only
-            pred_narrow = predictor_output[:, -num_target_tokens:, :]
-            # Shape: (B, num_target_tokens, predictor_dim)
-
-            # Step 10: Project back to encoder dimension and apply layer norm
-            predicted_block = self.output_proj(pred_narrow)
-            predicted_block = self.layer_norm_output(predicted_block)
-            # Shape: (B, num_target_tokens, encoder_d_model)
-
-            # Store predictions for this block
-            predicted_targets[:, block_idx, :, :] = predicted_block
-
-        return predicted_targets
 
 
 
@@ -589,45 +410,6 @@ class Encoder(torch.nn.Module):
         var_output = var_s + var_t
 
         return var_output
-
-# class Transformer_Encoder(nn.Module):
-#     """
-#     Transformer Encoder module.
-#     Processes a sequence of tokens and applies self-attention.
-#     Uses learnable positional embeddings based on the token's original absolute index.
-#     Handles variable sequence lengths using padding masks.
-#     """
-#
-#     def __init__(self, d_model, nhead, num_layers,
-#                  max_total_tokens):  # d_model is feature_dim, max_total_tokens is the max possible original index + 1
-#         super().__init__()
-#         self.d_model = d_model
-#         # Standard Transformer Encoder Layer.
-#         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1)
-#         # Stack of Transformer Encoder Layers.
-#         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-#         # Learnable positional embeddings for each possible original token position.
-#         self.pos_encoder = nn.Embedding(max_total_tokens, d_model)
-#
-#     def forward(self, src, token_original_indices=None, src_key_padding_mask=None):
-#         # Get positional embeddings based on original indices.
-#         if token_original_indices is None:
-#             token_original_indices = torch.arange(
-#                 src.shape[1], device=src.device, dtype=torch.long
-#             ).unsqueeze(0).expand(src.shape[0], -1)
-#         pos_embeddings = self.pos_encoder(token_original_indices)
-#
-#         # Zero out positional embeddings for padded positions (if mask provided)
-#         if src_key_padding_mask is not None:
-#             pos_embeddings = pos_embeddings.masked_fill(src_key_padding_mask.unsqueeze(-1), 0)
-#
-#         src = src + pos_embeddings
-#
-#         if src_key_padding_mask is not None:
-#             output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
-#         else:
-#             output = self.transformer_encoder(src)
-#         return output
 
 
 class TransformerDecoder(nn.Module):

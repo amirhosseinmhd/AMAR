@@ -29,8 +29,7 @@ class AMAR_MultiUser_RVQ(nn.Module):
     """
     def __init__(self, var_x_shape, features_dim=20, embedding_time_dim=100, num_decoder_layers=12,
                  temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0,
-                 num_embeddings=1024, commitment_cost=0.25, 
-                 codebook_initial_embeddings=None, num_rvq_layers=3):
+                 num_embeddings=1024, commitment_cost=0.25, num_rvq_layers=3):
         super().__init__()
         
         # Feature extractor (CNN part)
@@ -45,7 +44,6 @@ class AMAR_MultiUser_RVQ(nn.Module):
             num_embeddings=num_embeddings,
             embedding_dim=preset["nn"]["d_embedding"],
             commitment_cost=commitment_cost,
-            initial_embeddings_first_layer=None,
             quantization_dropout=preset["nn"].get("quantization_dropout", 0.2),
         )
         
@@ -141,28 +139,6 @@ def run_that_AMARRVQ(data_train_x,
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
     data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
 
-    
-    if preset["nn"]["KMEANS_Initialization"]:
-        # K-means initialization for VQ-VAE codebook
-        print("Initializing codebook with K-means...")
-        feature_extractor_for_init = Backbone(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
-
-        # Get a subset of data for initialization
-        init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
-        init_data, _ = next(iter(init_loader))
-        init_data = init_data.to(device)
-
-        with torch.no_grad():
-            initial_embeddings = feature_extractor_for_init(init_data)
-
-        # Flatten embeddings for KMeans
-        initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
-
-        num_embeddings = preset["nn"]["num_codes"]
-        kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
-        codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
-    else:
-        codebook_initial_embeddings = None # Initialize codebook with random embeddings
     #
     ##
     ## ========================================= Train & Evaluate =========================================
@@ -187,7 +163,6 @@ def run_that_AMARRVQ(data_train_x,
                                     dim_feedforward=preset["nn"]["dim_FFN"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     num_embeddings=preset["nn"]["num_codes"],
-                                    codebook_initial_embeddings=codebook_initial_embeddings,
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]),var_x_shape, as_strings=False)
 
     print("RVQ Model Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -222,7 +197,6 @@ def run_that_AMARRVQ(data_train_x,
                                     num_embeddings=preset["nn"]["num_codes"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     commitment_cost=preset["nn"]["commitment_cost"],
-                                    codebook_initial_embeddings=codebook_initial_embeddings if not codebook_initial_embeddings else codebook_initial_embeddings.to(device),
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 
         # model_AMARRVQ.feature_extractor = torch.compile(model_AMARRVQ.feature_extractor)
