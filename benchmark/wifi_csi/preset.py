@@ -8,8 +8,6 @@ import os
 preset = {
     #
     ## define model
-    "jepa_pretrained_path": "/Users/amirmhd/Downloads/best_model.pth",
-    "finetune_strategy": "finetune_encoder_small_lr",
     "wandb_name": "00",
     "model": "DETR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                  # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
@@ -20,7 +18,7 @@ preset = {
     "task": "activity",                                 # "identity", "activity", "location"
     #
     ## number of repeated experiments
-    "repeat": 8,
+    "repeat": 2,
     ## path of data
     "path": {
 
@@ -53,7 +51,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 5e-4,                                     # learning rate
-        "epoch": 300,                                   # number of epochs
+        "epoch": 1,                                   # number of epochs
         "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
