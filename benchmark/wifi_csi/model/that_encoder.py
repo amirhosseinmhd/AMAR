@@ -455,7 +455,7 @@ class TransformerDecoderLayer(nn.Module):
         return tgt
 
 
-class DETR_MultiUser(nn.Module):
+class AMAR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, var_y_shape, temp_cross = 1, num_queries=5):
         super().__init__()
 
@@ -750,10 +750,10 @@ def run_that_decoder(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(var_x_shape, var_y_shape, temp_cross=preset["nn"]["cross_attention_temp"],
+        model_AMAR = AMAR_MultiUser(var_x_shape, var_y_shape, temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"]).to(device)
         #
-        optimizer = torch.optim.Adam(model_detr.parameters(),
+        optimizer = torch.optim.Adam(model_AMAR.parameters(),
                                      lr=preset["nn"]["lr"],
                                      weight_decay=preset["nn"]["weight_decay"])
         #
@@ -767,7 +767,7 @@ def run_that_decoder(data_train_x,
         #
         ## ---------------------------------------- Train -----------------------------------------
         #
-        var_best_weight = train(model=model_detr,
+        var_best_weight = train(model=model_AMAR,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
@@ -782,10 +782,10 @@ def run_that_decoder(data_train_x,
         #
         ## ---------------------------------------- Test ------------------------------------------
         #
-        model_detr.load_state_dict(var_best_weight)
+        model_AMAR.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_detr(torch.from_numpy(data_test_x).to(device))
+            predict_test_y = model_AMAR(torch.from_numpy(data_test_x).to(device))
         #
         # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
         predict_test_y = predict_test_y.detach().cpu().numpy()

@@ -36,7 +36,7 @@ def master_splitter(preset, var_task, var_model, var_users):
 
         if var_model == "THAT_MULTI_HEAD":
             y = reduce_dataset(y)  # CHECKKKKKKKK HEREEEEEE
-        elif var_model == "THAT_ENCODER" or var_model == "DETR" or var_model== "multi_user" or var_model=="DETR_VQ" or var_model=="DETR_RVQ" or var_model == "JEPA_HYB" or var_model == "JEPA":
+        elif var_model == "THAT_ENCODER" or var_model == "AMAR" or var_model== "multi_user" or var_model=="AMAR_VQ" or var_model=="AMAR_RVQ" or var_model == "JEPA_HYB" or var_model == "JEPA":
             y = reduce_dataset(y, preset["nn"]["num_obj_queries"])  # CHECKKKKKKKK HEREEEEEE
         elif var_model == "THAT_COUNT_CONSTRAINED":
             y_red = reduce_dataset(y)
@@ -143,7 +143,7 @@ def run():
 
     elif var_model == "THAT_ENCODER": run_model = run_that_decoder
 
-    elif var_model == "DETR": run_model = run_that_detr
+    elif var_model == "AMAR": run_model = run_that_AMAR
 
     elif var_model == "CROWD_COUNTING_THAT": run_model = run_crowd_counting_THAT
 
@@ -153,9 +153,9 @@ def run():
 
     elif var_model == "JEPA": run_model = run_JEPA
 
-    # elif var_model == "DETR_VQ": run_model = run_that_detrVQ
+    # elif var_model == "AMAR_VQ": run_model = run_that_AMARVQ
 
-    elif var_model == "DETR_RVQ": run_model = run_that_detrRVQ
+    elif var_model == "AMAR_RVQ": run_model = run_that_AMARRVQ
 
     else:
         raise Exception("Not valid name for model")
@@ -178,9 +178,9 @@ def run():
     print(f"EXPERIMENT RESULTS - Model: {var_model}, Task: {var_task}")
     print("="*80)
     
-    # Check if this is a layered result (like DETR) or single result
+    # Check if this is a layered result (like AMAR) or single result
     if isinstance(result, dict) and any(key.startswith('layer_') for key in result.keys() if isinstance(key, str)):
-        # This is a layered result (DETR models)
+        # This is a layered result (AMAR models)
         print("LAYERED MODEL RESULTS:")
         for layer_key in sorted([k for k in result.keys() if isinstance(k, str) and k.startswith('layer_')]):
             layer_results = result[layer_key]

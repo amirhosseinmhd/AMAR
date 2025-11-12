@@ -6,14 +6,16 @@ import time
 import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.cluster import KMeans
 #
 import torch.nn as nn
-from torch.utils.data import TensorDataset
+from torch.utils.data import TensorDataset, DataLoader
 from ptflops import get_model_complexity_info
 from sklearn.decomposition import PCA
-from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder
+from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder, VectorQuantizer, ResidualVectorQuantizer
 from model.losses.supervised_loss import HungarianMatchingLoss
-from train import train
+from train_vq import train as train_vq_func
+from train_rvq import train as train_rvq_func
 from preset import preset
 from utils import *
 import wandb
@@ -21,21 +23,43 @@ import wandb
 
 
 
-
-class DETR_MultiUser(nn.Module):
-    def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0
-                 , pca_embeddings=None,):
+class AMAR_MultiUser_RVQ(nn.Module):
+    """
+    AMAR model with Residual Vector Quantization (RVQ).
+    Architecture: CNN → RVQ → TransformerEncoder → Decoder
+    """
+    def __init__(self, var_x_shape, features_dim=20, embedding_time_dim=100, num_decoder_layers=12,
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0,
+                 pca_embeddings=None, num_embeddings=1024, commitment_cost=0.25, 
+                 codebook_initial_embeddings=None, num_rvq_layers=3):
         super().__init__()
-        # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
-        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"])
-                                                     # embedding_time_dim=preset["cnn_embedding_time_dim"])
-                                                                # pca_components=pca_embeddings)
+        
+        # Feature extractor (CNN part)
+        self.feature_extractor = PCAFeatureExtractor(
+            input_channels=270, 
+            output_channels=preset["nn"]["d_embedding"],
+            pca_components=None
+        )
 
-        # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
-        #                                    num_transformer_encoder_layers=8)
-        self.encoder = Transformer_Encoder( d_model=preset["nn"]["d_embedding"], nhead=n_attention_heads, num_layers=preset["nn"]["n_layers_encoder"],
-                 max_total_tokens=preset["nn"]["token_length"])
+        # Residual Vector Quantizer (RVQ part)
+        self.rvq_layer = ResidualVectorQuantizer(
+            num_layers=num_rvq_layers,
+            num_embeddings=num_embeddings,
+            embedding_dim=preset["nn"]["d_embedding"],
+            commitment_cost=commitment_cost,
+            initial_embeddings_first_layer=None,
+            quantization_dropout=preset["nn"].get("quantization_dropout", 0.2),
+        )
+        
+        # Transformer Encoder
+        self.encoder = Transformer_Encoder(
+            d_model=preset["nn"]["d_embedding"], 
+            nhead=n_attention_heads, 
+            num_layers=preset["nn"]["n_layers_encoder"],
+            max_total_tokens=preset["nn"]["token_length"]
+        )
+        
+        # Transformer Decoder
         self.decoder = TransformerDecoder(
             d_model=features_dim,
             nhead=n_attention_heads,
@@ -46,26 +70,41 @@ class DETR_MultiUser(nn.Module):
             temp_cross_attention=temp_cross, 
             query_dropout_rate=query_dropout_rate
         )
+        
+        # Share positional encoding between encoder and decoder
         self.decoder.memory_pos_encoding = self.encoder.pos_encoder
+    
     def forward(self, x):
+        # Step 1: CNN Feature Extraction
+        continuous_emb = self.feature_extractor(x)
 
-        extracted_features = self.feature_extractor(x)
+        # Step 2: Residual Vector Quantization
+        quantized_emb_st, quantized_emb, all_indices, all_quantized_layers = self.rvq_layer(continuous_emb)
 
-        memory = self.encoder(extracted_features)
+        # Step 3: Transformer Encoder
+        memory = self.encoder(quantized_emb_st)
 
+        # Step 4: Transformer Decoder
         outputs_class = self.decoder(memory)
 
-        return outputs_class
+        return outputs_class, continuous_emb, quantized_emb, all_indices, all_quantized_layers
+
+    def compute_rvq_loss(self, continuous_emb, all_quantized_layers):
+        """
+        Compute RVQ loss across all quantization layers.
+        """
+        return self.rvq_layer.compute_loss(continuous_emb, all_quantized_layers)
 
 
-def run_that_detr(data_train_x,
+
+def run_that_AMARRVQ(data_train_x,
                      data_train_y,
                      data_test_x,
                      data_test_y,
                      var_repeat=10):
     """
     [description]
-    : run WiFi-based model Transformer_Encoder_DECODER
+    : run WiFi-based model Transformer_Encoder_DECODER with Residual Vector Quantization (RVQ)
     [parameter]
     : data_train_x: numpy array, CSI amplitude to train model
     : data_train_y: numpy array, labels to train model
@@ -89,14 +128,6 @@ def run_that_detr(data_train_x,
     
     print(f"Using device: {device}")
     #
-    ## Remove the internal validation split since validation data is now provided directly
-    # data_test_x, data_valid_x, data_test_y, data_valid_y = strat_train_test_split(
-    #     data_x=data_test_x,
-    #     data_y=data_test_y,
-    #     test_size=0.5,
-    #     shuffle=True,
-    #     random_state=39)
-
     data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
                                                                             test_size=0.5,
                                                                             shuffle=True,
@@ -117,9 +148,30 @@ def run_that_detr(data_train_x,
     var_x_shape = data_train_x[0].shape
     #
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
-    # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
     data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
 
+    
+    if preset["nn"]["KMEANS_Initialization"]:
+        # K-means initialization for VQ-VAE codebook
+        print("Initializing codebook with K-means...")
+        feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
+
+        # Get a subset of data for initialization
+        init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
+        init_data, _ = next(iter(init_loader))
+        init_data = init_data.to(device)
+
+        with torch.no_grad():
+            initial_embeddings = feature_extractor_for_init(init_data)
+
+        # Flatten embeddings for KMeans
+        initial_embeddings_flat = initial_embeddings.reshape(-1, preset["nn"]["d_embedding"]).cpu().numpy()
+
+        num_embeddings = preset["nn"]["num_codes"]
+        kmeans = KMeans(n_clusters=num_embeddings, random_state=0, n_init=8).fit(initial_embeddings_flat)
+        codebook_initial_embeddings = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+    else:
+        codebook_initial_embeddings = None # Initialize codebook with random embeddings
     #
     ##
     ## ========================================= Train & Evaluate =========================================
@@ -133,8 +185,8 @@ def run_that_detr(data_train_x,
     result_f1_score = []
     result_avg_count_error = []
 
-    #
-    var_macs, var_params = get_model_complexity_info(DETR_MultiUser(var_x_shape,
+    # Calculate model complexity for RVQ model
+    var_macs, var_params = get_model_complexity_info(AMAR_MultiUser_RVQ(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -142,33 +194,34 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]),var_x_shape, as_strings=False)
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    num_embeddings=preset["nn"]["num_codes"],
+                                    pca_embeddings=pca_components,
+                                    codebook_initial_embeddings=codebook_initial_embeddings,
+                                    num_rvq_layers=preset["nn"]["num_rvq_layers"]),var_x_shape, as_strings=False)
 
-    print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
-
-    #
+    print("RVQ Model Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
     for var_r in range(var_repeat):
         #
         ##
         var_mode = "multi_head"
-        name_run = "Empty"
         if preset["pretrained_path"]:
-            name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
+            name_run = f"AMAR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
         else:
             pretrained_state = "NPT"
-            name_run = f"DETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
+            name_run = f"AMAR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
-            project="FINAL_DETR",
-            name= name_run +preset["wandb_name"] ,
+            project="REALREAL_FINAL_RVQ",
+            name= name_run + preset["wandb_name"],
             config=preset,
             reinit=True  # Allow multiple wandb.init() calls in the same process
         )
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(var_x_shape,
+        model_AMARRVQ = AMAR_MultiUser_RVQ(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -176,32 +229,47 @@ def run_that_detr(data_train_x,
                                     temp_cross=preset["nn"]["cross_attention_temp"],
                                     num_queries=preset["nn"]["num_obj_queries"],
                                     dim_feedforward=preset["nn"]["dim_FFN"],
-                                    query_dropout_rate=preset["nn"]["query_dropout_rate"]#,
-                                    # pca_embeddings=pca_components
-                                    ).to(device)
+                                    num_embeddings=preset["nn"]["num_codes"],
+                                    query_dropout_rate=preset["nn"]["query_dropout_rate"],
+                                    commitment_cost=preset["nn"]["commitment_cost"],
+                                    pca_embeddings=pca_components if not pca_components else pca_components.to(device),
+                                    codebook_initial_embeddings=codebook_initial_embeddings if not codebook_initial_embeddings else codebook_initial_embeddings.to(device),
+                                    num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 
-        model_detr.feature_extractor = torch.compile(model_detr.feature_extractor)
-        # model_detr.decoder = torch.compile(model_detr.decoder)        # wandb.watch(
-        #     model_detr.feature_extractor,  # Directly target the CNN backbone
-        #     log="all",  # Log gradients and parameters
-        #     log_freq=50,  # Frequency of logging
-        #     log_graph=True  # Optional: visualize computation graph
-        # )
-
+        # model_AMARRVQ.feature_extractor = torch.compile(model_AMARRVQ.feature_extractor)
+        #
+        ##
+        # Separate learning rates: 0.1x for codebook, 1x for other parameters
+        codebook_params = []
+        other_params = []
+        
+        for name, param in model_AMARRVQ.named_parameters():
+            if 'rvq_layer' in name and 'embedding.weight' in name:
+                codebook_params.append(param)
+            else:
+                other_params.append(param)
+        
         if preset.get("pretrained_path"):
-            model_detr, param_groups = load_model_components(
-                model=model_detr,
+            model_AMARRVQ, param_groups = load_model_components(
+                model=model_AMARRVQ,
                 load_path=preset["pretrained_path"],
                 lr = preset["nn"]["lr"],
                 scenario=preset.get("transfer_scenario"),
                 device=device
             )
-            optimizer = torch.optim.Adam(param_groups)
+            # Update param_groups to include separate learning rate for codebook
+            # Note: This assumes load_model_components returns standard param_groups
+            # We'll need to add codebook-specific groups
+            param_groups_with_codebook = param_groups + [
+                {'params': codebook_params, 'lr': preset["nn"]["lr"] * 0.1, 'weight_decay': preset["nn"]["weight_decay"]}
+            ]
+            optimizer = torch.optim.Adam(param_groups_with_codebook)
         else:
-            optimizer = torch.optim.Adam(model_detr.parameters(),
-                                         lr=preset["nn"]["lr"],
-                                         weight_decay=preset["nn"]["weight_decay"])
-
+            param_groups = [
+                {'params': other_params, 'lr': preset["nn"]["lr"], 'weight_decay': preset["nn"]["weight_decay"]},
+                {'params': codebook_params, 'lr': preset["nn"]["lr"] * 0.1, 'weight_decay': preset["nn"]["weight_decay"]}
+            ]
+            optimizer = torch.optim.Adam(param_groups)
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
             aux_loss_weight=preset["nn"]["loss"]["aux_loss_weight"],
@@ -212,7 +280,7 @@ def run_that_detr(data_train_x,
         #
         ## ---------------------------------------- Train -----------------------------------------
         #
-        var_best_weight = train(model=model_detr,
+        var_best_weight = train_rvq_func(model=model_AMARRVQ,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
@@ -224,21 +292,20 @@ def run_that_detr(data_train_x,
                                 var_mode=var_mode)
         # Save model components based on scenario
         if preset.get("save_model"):
-            save_model_components(preset, model_detr)
+            save_model_components(preset, model_AMARRVQ)
         #
         var_time_1 = time.time()
         #
 
-
         ## ---------------------------------------- Test ------------------------------------------
         #
-        model_detr.load_state_dict(var_best_weight)
+        model_AMARRVQ.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_detr(torch.from_numpy(data_test_x).to(device))
+            data_test_x_tensor = torch.from_numpy(data_test_x).to(device)
+            outputs_class, continuous_emb, quantized_emb, all_indices, all_quantized_layers = model_AMARRVQ(data_test_x_tensor)
         #
-        # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
-        predict_test_y = predict_test_y.detach().cpu().numpy()
+        predict_test_y = outputs_class.detach().cpu().numpy()
         #
         var_time_2 = time.time()
         #
@@ -275,8 +342,9 @@ def run_that_detr(data_train_x,
             result_f1_score[idx].append(layer_metrics['f1_score'])
             result_avg_count_error[idx].append(layer_metrics['mean_count_error'])
 
+    # Log aggregated results only if not in last_layer_only mode
         if last_layer_only:
-            layer_metrics = dict_layer_acc["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
+            layer_metrics = dict_layer_acc["layer_" + str(preset["nn"]["num_decoder_layers"] - 1)]
             wandb.log({
                 f"test_results/repeat": var_r,
                 f"test_results/train_time": var_time_1 - var_time_0,
@@ -297,9 +365,8 @@ def run_that_detr(data_train_x,
             }, step=var_r + 100000)
 
             print(
-                  "- Total Error %.6f" % layer_metrics['total_error'],
-                  "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
-
+                "- Total Error %.6f" % layer_metrics['total_error'],
+                "- Perfect Prediction Percentage %.6f" % layer_metrics['perfect_prediction_percentage'])
 
     # Calculate averages and standard errors for each layer
     for layer_idx_num, layer_idx in enumerate(layers_idxs):
@@ -352,13 +419,13 @@ def run_that_detr(data_train_x,
 
     # Run visualization with the last layer's predictions
     
-    log_random_attention_weights_final(model_detr, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    log_random_attention_weights_final(model_AMARRVQ, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
     
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,
         y_true=data_test_y,
         var_mode=var_mode,
-        save_dir=f'./visualizations/experiment_{var_r}_{var_mode}'
+        save_dir=f'./visualizations/experiment_{var_r}_{var_mode}_rvq{preset["nn"]["num_rvq_layers"]}'
     )
     print("\nDetailed Performance Analysis:")
     print(f"Mean Error: {viz_stats['mean_error']:.4f} ± {viz_stats['error_std']:.4f}")

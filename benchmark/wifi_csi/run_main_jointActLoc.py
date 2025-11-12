@@ -83,8 +83,8 @@ def run():
 
     if preset["model"] == "multiSense_X":
         run_model  = run_multi_senseX
-    if preset["model"] == "joint_detr":
-        run_model = run_joint_detr
+    if preset["model"] == "joint_AMAR":
+        run_model = run_joint_AMAR
 
     result_act, result_loc = run_model(X_train, y_train_loc, y_train_act,
                                                 X_test, y_test_loc, y_test_act,

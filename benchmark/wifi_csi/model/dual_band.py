@@ -18,14 +18,14 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import Dataset
 # from train import train
 from preset import preset
-from model.detr import *
+from model.AMAR import *
 import wandb
 from torch.optim.lr_scheduler import LambdaLR
 import math
 from utils import *
-class DualBandDETR(torch.nn.Module):
+class DualBandAMAR(torch.nn.Module):
     def __init__(self, var_x_shape_band1, var_x_shape_band2, var_y_shape):
-        super(DualBandDETR, self).__init__()
+        super(DualBandAMAR, self).__init__()
         
         # Feature extractors for each band
         T_ = int(preset["nn"]["token_length"]/2)
@@ -242,7 +242,7 @@ def run_dual_band(data_train_x_band1, data_train_y_band1,
                   var_repeat=10):
     """
     [description]
-    : run WiFi-based dual-band model using DETR architecture
+    : run WiFi-based dual-band model using AMAR architecture
     [parameter]
     : data_train_x_band1, data_train_x_band2: numpy array, CSI amplitude to train model for each band
     : data_train_y_band1, data_train_y_band2: numpy array, labels to train model for each band
@@ -281,7 +281,7 @@ def run_dual_band(data_train_x_band1, data_train_y_band1,
     result_avg_count_error = []
 
     # Calculate model complexity
-    # var_macs, var_params = get_model_complexity_info(DualBandDETR(var_x_shape_band1, var_x_shape_band2, var_y_shape),
+    # var_macs, var_params = get_model_complexity_info(DualBandAMAR(var_x_shape_band1, var_x_shape_band2, var_y_shape),
     #                                                  (var_x_shape_band1, var_x_shape_band2), as_strings=False)
     # print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
 
@@ -290,10 +290,10 @@ def run_dual_band(data_train_x_band1, data_train_y_band1,
         var_mode = "multi_head"
         name_run = "Empty"
         if preset["pretrained_path"]:
-            name_run = f"DualBandDETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
+            name_run = f"DualBandAMAR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
         else:
             pretrained_state = "NPT"
-            name_run = f"DualBandDETR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state
+            name_run = f"DualBandAMAR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state
 
         run = wandb.init(
             project="experiment_dual_band",
@@ -303,7 +303,7 @@ def run_dual_band(data_train_x_band1, data_train_y_band1,
         )
 
         torch.random.manual_seed(var_r + 39)
-        model_dual_band = torch.compile(DualBandDETR(var_x_shape_band1, var_x_shape_band2, var_y_shape).to(device))
+        model_dual_band = torch.compile(DualBandAMAR(var_x_shape_band1, var_x_shape_band2, var_y_shape).to(device))
 
         optimizer = torch.optim.Adam(model_dual_band.parameters(),
                                      lr=preset["nn"]["lr"],

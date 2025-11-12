@@ -314,7 +314,7 @@ class TemperatureMultiheadAttention(nn.MultiheadAttention):
 
         return attn_output, attn_weights
 
-class DETR_MultiUser(nn.Module):
+class AMAR_MultiUser(nn.Module):
     def __init__(self,
                  # Decoder specific parameters
                  num_decoder_layers: int,
@@ -341,7 +341,7 @@ class DETR_MultiUser(nn.Module):
         decoder_d_model = self.jepa_config["d_embedding"]
         decoder_seq_length = self.jepa_config["num_segments_total_view"] * self.jepa_config["cnn_embedding_time_dim"]
 
-        self.decoder = TransformerDecoder( # This is the TransformerDecoder from detr.py/detr copy.py
+        self.decoder = TransformerDecoder( # This is the TransformerDecoder from AMAR.py/AMAR copy.py
             d_model=decoder_d_model,
             nhead=n_attention_heads_decoder,
             num_decoder_layers=num_decoder_layers,
@@ -427,7 +427,7 @@ class DETR_MultiUser(nn.Module):
             src_key_padding_mask=None 
         )
         
-        # --- Pass `memory` to the DETR Decoder ---
+        # --- Pass `memory` to the AMAR Decoder ---
         outputs_class = self.decoder(memory)
 
         return outputs_class
@@ -670,7 +670,7 @@ def run_multi_user(data_train_x,
     result_avg_count_error = []
 
     #
-    complexity_model_instance = DETR_MultiUser(
+    complexity_model_instance = AMAR_MultiUser(
         num_decoder_layers=preset["nn"]["num_decoder_layers"],
         temp_cross=preset["nn"]["cross_attention_temp"],
         n_attention_heads_decoder=preset["nn"]["n_attention_heads"],
@@ -703,14 +703,14 @@ def run_multi_user(data_train_x,
         name_run = "Empty"
         # Modify run name to reflect JEPA pretraining
         jepa_model_name_part = os.path.splitext(os.path.basename(jepa_pretrained_path))[0]
-        if preset["pretrained_path"]: # This was for DETR pretraining, adapt or remove
-            name_run = f"DETR_SSL_{jepa_model_name_part}_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
+        if preset["pretrained_path"]: # This was for AMAR pretraining, adapt or remove
+            name_run = f"AMAR_SSL_{jepa_model_name_part}_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
         else:
-            name_run = f"DETR_SSL_{jepa_model_name_part}_{var_r}_" + "_".join(preset["data"]["environment"]) + "_NPT" # NPT for No Pretrained DETR (but SSL from JEPA)
+            name_run = f"AMAR_SSL_{jepa_model_name_part}_{var_r}_" + "_".join(preset["data"]["environment"]) + "_NPT" # NPT for No Pretrained AMAR (but SSL from JEPA)
         
         print("Repeat", var_r)
         run = wandb.init(
-            project="test_detr_with_jepa_ssl", # Consider a new project name
+            project="test_AMAR_with_jepa_ssl", # Consider a new project name
             name= name_run + preset["wandb_name"] ,
             config=preset,
             reinit=True 
@@ -718,7 +718,7 @@ def run_multi_user(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_detr = DETR_MultiUser(
+        model_AMAR = AMAR_MultiUser(
             num_decoder_layers=preset["nn"]["num_decoder_layers"],
             temp_cross=preset["nn"]["cross_attention_temp"],
             n_attention_heads_decoder=preset["nn"]["n_attention_heads"],
@@ -736,44 +736,44 @@ def run_multi_user(data_train_x,
         
         if finetune_strategy == "freeze_all":
             print("Freezing pre-trained CNN and Encoder. Training only Decoder.")
-            for param in model_detr.feature_extractor.parameters():
+            for param in model_AMAR.feature_extractor.parameters():
                 param.requires_grad = False
-            for param in model_detr.encoder.parameters():
+            for param in model_AMAR.encoder.parameters():
                 param.requires_grad = False
-            params_to_optimize.append({'params': model_detr.decoder.parameters(), 'lr': preset["nn"]["lr"]})
+            params_to_optimize.append({'params': model_AMAR.decoder.parameters(), 'lr': preset["nn"]["lr"]})
 
         elif finetune_strategy == "finetune_encoder_small_lr":
             print("Fine-tuning pre-trained CNN and Encoder with smaller LR. Training Decoder with main LR.")
-            for param in model_detr.feature_extractor.parameters():
+            for param in model_AMAR.feature_extractor.parameters():
                 param.requires_grad = True
             params_to_optimize.append({
-                'params': model_detr.feature_extractor.parameters(),
+                'params': model_AMAR.feature_extractor.parameters(),
                 'lr': preset["nn"].get("lr_finetune_cnn", preset["nn"]["lr"] * 0.1)
             })
-            for param in model_detr.encoder.parameters():
+            for param in model_AMAR.encoder.parameters():
                 param.requires_grad = True
             params_to_optimize.append({
-                'params': model_detr.encoder.parameters(),
+                'params': model_AMAR.encoder.parameters(),
                 'lr': preset["nn"].get("lr_finetune_encoder", preset["nn"]["lr"] * 0.1)
             })
-            params_to_optimize.append({'params': model_detr.decoder.parameters(), 'lr': preset["nn"]["lr"]})
+            params_to_optimize.append({'params': model_AMAR.decoder.parameters(), 'lr': preset["nn"]["lr"]})
         
         elif finetune_strategy == "finetune_all_same_lr":
             print("Fine-tuning all components (CNN, Encoder, Decoder) with the same LR.")
-            for param in model_detr.parameters():
+            for param in model_AMAR.parameters():
                 param.requires_grad = True
-            params_to_optimize.append({'params': model_detr.parameters(), 'lr': preset["nn"]["lr"]})
+            params_to_optimize.append({'params': model_AMAR.parameters(), 'lr': preset["nn"]["lr"]})
         
         else: 
             print(f"Unknown finetune_strategy '{finetune_strategy}'. Defaulting to training only Decoder.")
-            for param in model_detr.feature_extractor.parameters():
+            for param in model_AMAR.feature_extractor.parameters():
                 param.requires_grad = False
-            for param in model_detr.encoder.parameters():
+            for param in model_AMAR.encoder.parameters():
                 param.requires_grad = False
-            params_to_optimize.append({'params': model_detr.decoder.parameters(), 'lr': preset["nn"]["lr"]})
+            params_to_optimize.append({'params': model_AMAR.decoder.parameters(), 'lr': preset["nn"]["lr"]})
 
         optimizer = torch.optim.AdamW(params_to_optimize, weight_decay=preset["nn"]["weight_decay"])
-        # Original detr.py used Adam. If you prefer Adam:
+        # Original AMAR.py used Adam. If you prefer Adam:
         # optimizer = torch.optim.Adam(params_to_optimize, weight_decay=preset["nn"]["weight_decay"])
 
         loss_fn = HungarianMatchingLoss(
@@ -786,7 +786,7 @@ def run_multi_user(data_train_x,
         #
         ## ---------------------------------------- Train -----------------------------------------
         #
-        var_best_weight = train(model=model_detr,
+        var_best_weight = train(model=model_AMAR,
                                 optimizer=optimizer,
                                 loss=loss_fn, # Use the renamed loss function
                                 data_train_set=data_train_set,
@@ -798,7 +798,7 @@ def run_multi_user(data_train_x,
                                 var_mode=var_mode)
         # Save model components based on scenario
         if preset.get("save_model"):
-            save_model_components(preset, model_detr)
+            save_model_components(preset, model_AMAR)
         #
         var_time_1 = time.time()
         #
@@ -806,10 +806,10 @@ def run_multi_user(data_train_x,
 
         ## ---------------------------------------- Test ------------------------------------------
         #
-        model_detr.load_state_dict(var_best_weight)
+        model_AMAR.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_detr(torch.from_numpy(data_test_x).to(device))
+            predict_test_y = model_AMAR(torch.from_numpy(data_test_x).to(device))
         #
         # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
         predict_test_y = predict_test_y.detach().cpu().numpy()
@@ -901,7 +901,7 @@ def run_multi_user(data_train_x,
 
     # Run visualization with the last layer's predictions
     
-    log_random_attention_weights_final(model_detr, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    log_random_attention_weights_final(model_AMAR, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
     
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,

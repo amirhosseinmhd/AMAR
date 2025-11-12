@@ -9,10 +9,10 @@ preset = {
     #
     ## define model
     "wandb_name": "00",
-    "model": "DETR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "AMAR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                  # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
-                                                              # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD DETR
-                                                            #JOINT_DETR, JEPA_HYB, "JEPA", "DETR_VQ", "DETR_RVQ"
+                                                              # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD AMAR
+                                                            #JOINT_AMAR, JEPA_HYB, "JEPA", "AMAR_VQ", "AMAR_RVQ"
     # "model": "MLP",
     ## define task
     "task": "activity",                                 # "identity", "activity", "location"

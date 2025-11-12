@@ -13,7 +13,7 @@ import time
 #     """
 #     Selectively load model components based on scenario from full model state dict
 #     Args:
-#         model: DETR_MultiUser model
+#         model: AMAR_MultiUser model
 #         load_path: Path to load full model state dict
 #         lr: Base learning rate
 #         scenario: One of ["full", "feature_extractor", "feature_encoder", "decoder_only"]
@@ -108,7 +108,7 @@ import time
 #     """
 #     Save model components based on scenario
 #     Args:
-#         model: DETR_MultiUserJoint model
+#         model: AMAR_MultiUserJoint model
 #         save_dir: Directory to save model
 #         scenario: One of ["full", "feature_extractor", "feature_encoder"]
 #     """

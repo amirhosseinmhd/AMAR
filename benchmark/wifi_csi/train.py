@@ -130,9 +130,9 @@ def train(model: Module,
 
             dict_error_valid = performance_metrics(data_valid_y, predict_valid_y, var_mode, var_threshold)
         #     # Log attention weights every N batches
-        # if preset["model"] == "DETR"  and var_epoch % 40 == 0:
+        # if preset["model"] == "AMAR"  and var_epoch % 40 == 0:
         #     log_attention_weights(model, np.argmax(predict_valid_y[-1], axis=-1), np.argmax(data_valid_y, axis=-1), var_epoch)
-        if preset["model"] == "DETR":
+        if preset["model"] == "AMAR":
             layers_idxs = ["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
             for layer_idx in layers_idxs:
                 layer_metrics = dict_error_valid[layer_idx]
