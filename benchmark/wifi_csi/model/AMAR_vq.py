@@ -11,8 +11,7 @@ from sklearn.cluster import KMeans
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from ptflops import get_model_complexity_info
-from sklearn.decomposition import PCA
-from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder, VectorQuantizer, ResidualVectorQuantizer
+from model.modules.molecules import Backbone, Transformer_Encoder, TransformerDecoder, VectorQuantizer, ResidualVectorQuantizer
 from model.losses.supervised_loss import HungarianMatchingLoss
 from train_vq import train as train_vq_func
 from train_rvq import train as train_rvq_func
@@ -30,15 +29,14 @@ class AMAR_MultiUser_RVQ(nn.Module):
     """
     def __init__(self, var_x_shape, features_dim=20, embedding_time_dim=100, num_decoder_layers=12,
                  temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0,
-                 pca_embeddings=None, num_embeddings=1024, commitment_cost=0.25, 
+                 num_embeddings=1024, commitment_cost=0.25, 
                  codebook_initial_embeddings=None, num_rvq_layers=3):
         super().__init__()
         
         # Feature extractor (CNN part)
-        self.feature_extractor = PCAFeatureExtractor(
+        self.feature_extractor = Backbone(
             input_channels=270, 
-            output_channels=preset["nn"]["d_embedding"],
-            pca_components=None
+            output_channels=preset["nn"]["d_embedding"]
         )
 
         # Residual Vector Quantizer (RVQ part)
@@ -137,13 +135,6 @@ def run_that_AMARRVQ(data_train_x,
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     data_x_mean = np.mean(data_train_x, axis=1)
-    if preset["nn"]["PCA"]:
-        pca = PCA(n_components=50)
-        pca.fit(data_x_mean)
-        pca_components = torch.from_numpy(pca.components_.T).float()
-        print(" Using PCA embeddings: mapping 270 to PCA components")
-    else:
-        pca_components = None
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
@@ -154,7 +145,7 @@ def run_that_AMARRVQ(data_train_x,
     if preset["nn"]["KMEANS_Initialization"]:
         # K-means initialization for VQ-VAE codebook
         print("Initializing codebook with K-means...")
-        feature_extractor_for_init = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
+        feature_extractor_for_init = Backbone(input_channels=270, output_channels=preset["nn"]["d_embedding"]).to(device)
 
         # Get a subset of data for initialization
         init_loader = DataLoader(data_train_set, batch_size=1024, shuffle=True)
@@ -196,7 +187,6 @@ def run_that_AMARRVQ(data_train_x,
                                     dim_feedforward=preset["nn"]["dim_FFN"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     num_embeddings=preset["nn"]["num_codes"],
-                                    pca_embeddings=pca_components,
                                     codebook_initial_embeddings=codebook_initial_embeddings,
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]),var_x_shape, as_strings=False)
 
@@ -232,7 +222,6 @@ def run_that_AMARRVQ(data_train_x,
                                     num_embeddings=preset["nn"]["num_codes"],
                                     query_dropout_rate=preset["nn"]["query_dropout_rate"],
                                     commitment_cost=preset["nn"]["commitment_cost"],
-                                    pca_embeddings=pca_components if not pca_components else pca_components.to(device),
                                     codebook_initial_embeddings=codebook_initial_embeddings if not codebook_initial_embeddings else codebook_initial_embeddings.to(device),
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 

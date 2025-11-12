@@ -210,10 +210,9 @@ class ResidualVectorQuantizer(nn.Module):
         """Get the current quantization dropout rate."""
         return self.quantization_dropout
 
-class PCAFeatureExtractor(nn.Module):
-    def __init__(self, input_channels=270, output_channels=16, pca_components=None):
-        super(PCAFeatureExtractor, self).__init__()
-        self.register_buffer('pca_components', pca_components)
+class Backbone(nn.Module):
+    def __init__(self, input_channels=270, output_channels=16):
+        super(Backbone, self).__init__()
         pca_output_dim = 180
         c_initial = 64  # Channels after initial convolution
         c_hierarchical_out = 64  # Channels after hierarchical dilated blocks

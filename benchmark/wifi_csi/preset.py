@@ -51,7 +51,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 5e-4,                                     # learning rate
-        "epoch": 1,                                   # number of epochs
+        "epoch": 300,                                   # number of epochs
         "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {

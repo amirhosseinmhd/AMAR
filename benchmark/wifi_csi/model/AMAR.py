@@ -10,8 +10,7 @@ from sklearn.model_selection import train_test_split
 import torch.nn as nn
 from torch.utils.data import TensorDataset
 from ptflops import get_model_complexity_info
-from sklearn.decomposition import PCA
-from model.modules.molecules import PCAFeatureExtractor, Transformer_Encoder, TransformerDecoder
+from model.modules.molecules import Backbone, Transformer_Encoder, TransformerDecoder
 from model.losses.supervised_loss import HungarianMatchingLoss
 from train import train
 from preset import preset
@@ -24,13 +23,11 @@ import wandb
 
 class AMAR_MultiUser(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
-                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0
-                 , pca_embeddings=None,):
+                 temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
         super().__init__()
         # self.feature_extractor = CNNFeatureExtractor(input_channels=var_x_shape[-1], output_channels=features_dim,embedding_time_dim=embedding_time_dim)
-        self.feature_extractor = PCAFeatureExtractor(input_channels=270, output_channels=preset["nn"]["d_embedding"])
+        self.feature_extractor = Backbone(input_channels=270, output_channels=preset["nn"]["d_embedding"])
                                                      # embedding_time_dim=preset["cnn_embedding_time_dim"])
-                                                                # pca_components=pca_embeddings)
 
         # self.encoder = Transformer_Encoder(var_embedding_shape, num_attention_heads=n_attention_heads,
         #                                    num_transformer_encoder_layers=8)
@@ -106,13 +103,6 @@ def run_that_AMAR(data_train_x,
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
     data_x_mean = np.mean(data_train_x, axis=1)
-    if preset["nn"]["PCA"]:
-        pca = PCA(n_components=50)
-        pca.fit(data_x_mean)
-        pca_components = torch.from_numpy(pca.components_.T).float()
-        print(" Using PCA embeddings: mapping 270 to PCA components")
-    else:
-        pca_components = None
     ## shape for model
     var_x_shape = data_train_x[0].shape
     #
