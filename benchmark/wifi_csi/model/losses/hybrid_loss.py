@@ -37,12 +37,12 @@ class CombinedHybridLoss(nn.Module):
         """
         # Extract outputs from hybrid model
         outputs_class = model_outputs["outputs_class"]
-        z_context_online = model_outputs["z_context_online"]
-        actual_targets_for_loss = model_outputs["actual_targets_for_loss"]
-        sampling_info = model_outputs["sampling_info"]
-        context_mask = sampling_info["context_mask"]
-        ssl_predictions = model_outputs["ssl_predictions"]
-        batch_size, num_target_blocks, num_target_tokens, dim_context = ssl_predictions.shape
+        # z_context_online = model_outputs["z_context_online"]
+        # actual_targets_for_loss = model_outputs["actual_targets_for_loss"]
+        # sampling_info = model_outputs["sampling_info"]
+        # context_mask = sampling_info["context_mask"]
+        # ssl_predictions = model_outputs["ssl_predictions"]
+        # batch_size, num_target_blocks, num_target_tokens, dim_context = ssl_predictions.shape
 
         # Calculate supervised loss
         supervised_loss_val = self.supervised_loss_fn(outputs_class, targets_supervised.float())
@@ -50,14 +50,15 @@ class CombinedHybridLoss(nn.Module):
         # target_indices = sampling_info["target_block_token_indices_tensor"].reshape(b * num_blocks,
         #                                                                             tokens_per_block)
 
-        actual_targets = actual_targets_for_loss.reshape(-1, num_target_tokens, dim_context)
+        # actual_targets = actual_targets_for_loss.reshape(-1, num_target_tokens, dim_context)
 
-        total_loss_jepa,  predictive_loss, jepa_std_loss, jepa_cov_loss = self.jepa_loss_fn(
-            predictions=ssl_predictions,
-            actual_targets=actual_targets,
-            z_context_online=z_context_online,
-            context_padding_mask=context_mask
-        )
+        total_loss_jepa,  predictive_loss, jepa_std_loss, jepa_cov_loss = (0,0,0,0)
+        #     self.jepa_loss_fn(
+        #     predictions=ssl_predictions,
+        #     actual_targets=actual_targets,
+        #     z_context_online=z_context_online,
+        #     context_padding_mask=context_mask
+        # ))
 
 
         total_loss = (1-self.SSL_coeff) * supervised_loss_val + self.SSL_coeff * total_loss_jepa

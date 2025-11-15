@@ -7,6 +7,7 @@
 import time
 import torch
 import numpy as np
+from sklearn.model_selection import train_test_split
 #
 from torch.utils.data import TensorDataset
 from ptflops import get_model_complexity_info
@@ -14,6 +15,8 @@ from sklearn.metrics import classification_report, accuracy_score
 #
 from train import train
 from preset import preset
+from utils import *
+import wandb
 
 #
 ##
@@ -117,6 +120,12 @@ def run_ablstm(data_train_x,
     ## ============================================ Preprocess ============================================
     #
     ##
+    data_valid_x, data_test_x, data_valid_y, data_test_y = train_test_split(data_test_x, data_test_y,
+                                                                            test_size = 0.5,
+                                                                            shuffle = True,
+                                                                            random_state = 39)
+
+    data_valid_x = data_valid_x.reshape(data_valid_x.shape[0], data_valid_x.shape[1], -1)
     data_train_x = data_train_x.reshape(data_train_x.shape[0], data_train_x.shape[1], -1)
     data_test_x = data_test_x.reshape(data_test_x.shape[0], data_test_x.shape[1], -1)
     #
@@ -124,16 +133,21 @@ def run_ablstm(data_train_x,
     var_x_shape, var_y_shape = data_train_x[0].shape, data_train_y[0].reshape(-1).shape
     #
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
-    data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
+    # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
+    data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
+
     #
     ##
     ## ========================================= Train & Evaluate =========================================
     #
     ##
-    result = {}
     result_accuracy = []
     result_time_train = []
     result_time_test = []
+    result_total_error = []
+    result_precision = []
+    result_recall = []
+    result_f1_score = []
     #
     ##
     var_macs, var_params = get_model_complexity_info(ABLSTM(var_x_shape, var_y_shape), 
@@ -146,17 +160,38 @@ def run_ablstm(data_train_x,
         #
         ##
         print("Repeat", var_r)
+        name_run = f"BCE_ABLSTM_{var_r}_" + "_".join(preset["data"]["environment"])
+
+        run = wandb.init(
+            project="FINAL_FINAL_EEEFINAL",
+            name= name_run,
+            config=preset,
+            reinit=True  # Allow multiple wandb.init() calls in the same process
+        )
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_ablstm = torch.compile(ABLSTM(var_x_shape, var_y_shape).to(device))
+        model_ablstm = ABLSTM(var_x_shape, var_y_shape).to(device)
         #
-        optimizer = torch.optim.Adam(model_ablstm.parameters(), 
-                                     lr = preset["nn"]["lr"],
-                                     weight_decay = 0)
+        if preset.get("pretrained_path"):
+            model_ablstm, param_groups = load_model_components(
+                model_ablstm,
+                preset["pretrained_path"],
+                preset["nn"]["lr"],
+                preset.get("transfer_scenario"),
+                device
+            )
+            optimizer = torch.optim.Adam(param_groups)
+        else:
+            optimizer = torch.optim.Adam(model_ablstm.parameters(), 
+                                         lr = preset["nn"]["lr"],
+                                         weight_decay = preset["nn"]["weight_decay"])
+
         #
-        loss = torch.nn.BCEWithLogitsLoss(pos_weight = torch.tensor([6] * var_y_shape[-1]).to(device))
-        #
+        loss_mode = "baseline"
+        loss = torch.nn.BCEWithLogitsLoss(pos_weight = torch.tensor([4] * var_y_shape[-1]).to(device))
+        # loss = torch.nn.MSELoss()
+        # loss = torch.nn.SmoothL1Loss()
         var_time_0 = time.time()
         #
         ## ---------------------------------------- Train -----------------------------------------
@@ -165,13 +200,18 @@ def run_ablstm(data_train_x,
                                 optimizer = optimizer, 
                                 loss = loss, 
                                 data_train_set = data_train_set,
-                                data_test_set = data_test_set,
+                                data_valid_set = data_valid_set,
                                 var_threshold = preset["nn"]["threshold"],
                                 var_batch_size = preset["nn"]["batch_size"],
                                 var_epochs = preset["nn"]["epoch"],
-                                device = device)
+                                device = device,
+                                var_mode = loss_mode)
         #
         var_time_1 = time.time()
+
+        if preset.get("save_model"):
+            save_model_components(preset, model_ablstm)
+
         #
         ## ---------------------------------------- Test ------------------------------------------
         #
@@ -180,7 +220,6 @@ def run_ablstm(data_train_x,
         with torch.no_grad():
             predict_test_y = model_ablstm(torch.from_numpy(data_test_x).to(device))
         #
-        predict_test_y = (torch.sigmoid(predict_test_y) > preset["nn"]["threshold"]).float()
         predict_test_y = predict_test_y.detach().cpu().numpy()
         #
         var_time_2 = time.time()
@@ -188,33 +227,92 @@ def run_ablstm(data_train_x,
         ## -------------------------------------- Evaluate ----------------------------------------
         #
         ##
-        data_test_y_c = data_test_y.reshape(-1, data_test_y.shape[-1])
-        predict_test_y_c = predict_test_y.reshape(-1, data_test_y.shape[-1])
+
+        dict_true_acc = performance_metrics(data_test_y, predict_test_y, var_mode=loss_mode, var_threshold= preset["nn"]["threshold"])
+        wandb.log({
+            "repeat": var_r,
+            "train_time": var_time_1 - var_time_0,
+            "test_time": var_time_2 - var_time_1,
+            "TOTAL_TESTSET_ERROR": dict_true_acc['total_error'],
+            "TOTAL_TESTSET_perfect_prediction_percentage": dict_true_acc['perfect_prediction_percentage'],
+            "TOTAL_ACCURACY": dict_true_acc['accuracy'],
+            "mean_count_error": dict_true_acc['mean_count_error'],
+            "error_per_person_1": dict_true_acc['error_per_person'][0],
+            "error_per_person_2": dict_true_acc['error_per_person'][1],
+            "error_per_person_3": dict_true_acc['error_per_person'][2],
+            "error_per_person_4": dict_true_acc['error_per_person'][3],
+            "error_per_person_5": dict_true_acc['error_per_person'][4],
+            "precision": dict_true_acc['precision'],
+            "recall": dict_true_acc['recall'],
+            "f1_score": dict_true_acc['f1_score']
+        })
+        print(" %.6fs" % (time.time() - var_time_1),
+              "- Total Error %.6f" % dict_true_acc['total_error'],
+              "-  perfect_prediction_percentage %.6f" % dict_true_acc['perfect_prediction_percentage'],
+              )
         #
-        ## Accuracy
-        result_acc = accuracy_score(data_test_y_c.astype(int), 
-                                    predict_test_y_c.astype(int))
         #
-        ## Report
-        result_dict = classification_report(data_test_y_c, 
-                                            predict_test_y_c, 
-                                            digits = 6, 
-                                            zero_division = 0, 
-                                            output_dict = True)
+
         #
-        result["repeat_" + str(var_r)] = result_dict
-        #
-        result_accuracy.append(result_acc)
+        result_accuracy.append(dict_true_acc['perfect_prediction_percentage'])
         result_time_train.append(var_time_1 - var_time_0)
         result_time_test.append(var_time_2 - var_time_1)
-        #
-        print("repeat_" + str(var_r), result_accuracy)
-        print(result)
-    #
-    ##
-    result["accuracy"] = {"avg": np.mean(result_accuracy), "std": np.std(result_accuracy)}
-    result["time_train"] = {"avg": np.mean(result_time_train), "std": np.std(result_time_train)}
-    result["time_test"] = {"avg": np.mean(result_time_test), "std": np.std(result_time_test)}
-    result["complexity"] = {"parameter": var_params, "flops": var_macs * 2}
-    #
-    return result
+        result_total_error.append(dict_true_acc['total_error'])
+        result_precision.append(dict_true_acc['precision'])
+        result_recall.append(dict_true_acc['recall'])
+        result_f1_score.append(dict_true_acc['f1_score'])
+
+    # Calculate aggregated metrics with standard errors
+    ppp_array = np.array(result_accuracy)  # result_accuracy contains PPP values
+    precision_array = np.array(result_precision)
+    recall_array = np.array(result_recall)
+    f1_array = np.array(result_f1_score)
+    total_error_array = np.array(result_total_error)
+    
+    # Create result dictionary with averaged metrics and standard errors
+    aggregated_result = {
+        'avg_PPP': float(np.mean(ppp_array)),
+        'avg_precision': float(np.mean(precision_array)),
+        'avg_recall': float(np.mean(recall_array)),
+        'avg_f1_score': float(np.mean(f1_array)),
+        'avg_total_error': float(np.mean(total_error_array)),
+        'std_PPP': float(np.std(ppp_array, ddof=1)) if len(ppp_array) > 1 else 0.0,
+        'std_precision': float(np.std(precision_array, ddof=1)) if len(precision_array) > 1 else 0.0,
+        'std_recall': float(np.std(recall_array, ddof=1)) if len(recall_array) > 1 else 0.0,
+        'std_f1_score': float(np.std(f1_array, ddof=1)) if len(f1_array) > 1 else 0.0,
+        'std_total_error': float(np.std(total_error_array, ddof=1)) if len(total_error_array) > 1 else 0.0,
+        'se_PPP': float(np.std(ppp_array, ddof=1) / np.sqrt(len(ppp_array))) if len(ppp_array) > 1 else 0.0,
+        'se_precision': float(np.std(precision_array, ddof=1) / np.sqrt(len(precision_array))) if len(precision_array) > 1 else 0.0,
+        'se_recall': float(np.std(recall_array, ddof=1) / np.sqrt(len(recall_array))) if len(recall_array) > 1 else 0.0,
+        'se_f1_score': float(np.std(f1_array, ddof=1) / np.sqrt(len(f1_array))) if len(f1_array) > 1 else 0.0,
+        'se_total_error': float(np.std(total_error_array, ddof=1) / np.sqrt(len(total_error_array))) if len(total_error_array) > 1 else 0.0,
+        'avg_train_time': sum(result_time_train) / len(result_time_train),
+        'avg_test_time': sum(result_time_test) / len(result_time_test),
+    }
+    
+    wandb.log({
+        "avg_accuracy": aggregated_result['avg_PPP'],
+        "avg_train_time": aggregated_result['avg_train_time'],
+        "avg_test_time": aggregated_result['avg_test_time'],
+        "avg_total_error": aggregated_result['avg_total_error'],
+        "avg_precision": aggregated_result['avg_precision'],
+        "avg_recall": aggregated_result['avg_recall'],
+        "avg_f1_score": aggregated_result['avg_f1_score'],
+    })
+    viz_stats = visualize_model_performance(
+        y_pred=predict_test_y,
+        y_true=data_test_y,
+        var_mode=loss_mode,
+        save_dir=f'./visualizations/experiment__{loss_mode}'
+    )
+
+    # Print additional statistics
+    print("\nDetailed Performance Analysis:")
+    print(f"Mean Error: {viz_stats['mean_error']:.4f} ± {viz_stats['error_std']:.4f}")
+    print("\nClass-wise Mean Absolute Error:")
+    for i, error in enumerate(viz_stats['class_wise_mae']):
+        print(f"Class {i}: {error:.4f}")
+    print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
+
+    wandb.finish()
+    return aggregated_result

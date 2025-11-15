@@ -388,6 +388,11 @@ def run_that_multihead(data_train_x,
     result_accuracy = []
     result_time_train = []
     result_time_test = []
+    result_precision = []
+    result_recall = []
+    result_f1_score = []
+    result_total_error = []
+    result_ppp = []
     #
     ##
     var_macs, var_params = get_model_complexity_info(THAT(var_x_shape, var_y_shape),
@@ -475,13 +480,55 @@ def run_that_multihead(data_train_x,
         #
 
         #
-        result_accuracy.append(dict_true_acc['perfect_prediction_percentage'])
+        result_accuracy.append(dict_true_acc['accuracy'])
+        result_ppp.append(dict_true_acc['perfect_prediction_percentage'])
         result_time_train.append(var_time_1 - var_time_0)
         result_time_test.append(var_time_2 - var_time_1)
+        result_precision.append(dict_true_acc['precision'])
+        result_recall.append(dict_true_acc['recall'])
+        result_f1_score.append(dict_true_acc['f1_score'])
+        result_total_error.append(dict_true_acc['total_error'])
+    # Calculate aggregated metrics with standard errors
+    ppp_array = np.array(result_ppp)
+    precision_array = np.array(result_precision)
+    recall_array = np.array(result_recall)
+    f1_array = np.array(result_f1_score)
+    accuracy_array = np.array(result_accuracy)
+    total_error_array = np.array(result_total_error)
+    
+    # Create result dictionary with averaged metrics and standard errors
+    result = {
+        'avg_PPP': float(np.mean(ppp_array)),
+        'avg_precision': float(np.mean(precision_array)),
+        'avg_recall': float(np.mean(recall_array)),
+        'avg_f1_score': float(np.mean(f1_array)),
+        'avg_accuracy': float(np.mean(accuracy_array)),
+        'avg_total_error': float(np.mean(total_error_array)),
+        'std_PPP': float(np.std(ppp_array, ddof=1)) if len(ppp_array) > 1 else 0.0,
+        'std_precision': float(np.std(precision_array, ddof=1)) if len(precision_array) > 1 else 0.0,
+        'std_recall': float(np.std(recall_array, ddof=1)) if len(recall_array) > 1 else 0.0,
+        'std_f1_score': float(np.std(f1_array, ddof=1)) if len(f1_array) > 1 else 0.0,
+        'std_accuracy': float(np.std(accuracy_array, ddof=1)) if len(accuracy_array) > 1 else 0.0,
+        'std_total_error': float(np.std(total_error_array, ddof=1)) if len(total_error_array) > 1 else 0.0,
+        'se_PPP': float(np.std(ppp_array, ddof=1) / np.sqrt(len(ppp_array))) if len(ppp_array) > 1 else 0.0,
+        'se_precision': float(np.std(precision_array, ddof=1) / np.sqrt(len(precision_array))) if len(precision_array) > 1 else 0.0,
+        'se_recall': float(np.std(recall_array, ddof=1) / np.sqrt(len(recall_array))) if len(recall_array) > 1 else 0.0,
+        'se_f1_score': float(np.std(f1_array, ddof=1) / np.sqrt(len(f1_array))) if len(f1_array) > 1 else 0.0,
+        'se_accuracy': float(np.std(accuracy_array, ddof=1) / np.sqrt(len(accuracy_array))) if len(accuracy_array) > 1 else 0.0,
+        'se_total_error': float(np.std(total_error_array, ddof=1) / np.sqrt(len(total_error_array))) if len(total_error_array) > 1 else 0.0,
+        'avg_train_time': sum(result_time_train) / len(result_time_train),
+        'avg_test_time': sum(result_time_test) / len(result_time_test),
+    }
+    
     wandb.log({
-        "avg_accuracy": sum(result_accuracy) / len(result_accuracy),
-        "avg_train_time": sum(result_time_train) / len(result_time_train),
-        "avg_test_time": sum(result_time_test) / len(result_time_test),
+        "avg_accuracy": result['avg_accuracy'],
+        "avg_train_time": result['avg_train_time'],
+        "avg_test_time": result['avg_test_time'],
+        "avg_precision": result['avg_precision'],
+        "avg_recall": result['avg_recall'],
+        "avg_f1_score": result['avg_f1_score'],
+        "avg_PPP": result['avg_PPP'],
+        "avg_total_error": result['avg_total_error']
     })
     viz_stats = visualize_model_performance(
         y_pred=predict_test_y,
@@ -496,7 +543,7 @@ def run_that_multihead(data_train_x,
         print(f"Class {i}: {error:.4f}")
     print(f"\nPerfect Predictions: {viz_stats['perfect_predictions'] * 100:.2f}%")
     wandb.finish()
-    return dict_true_acc
+    return result
     #
     #     predict_test_y = (torch.sigmoid(predict_test_y) > preset["nn"]["threshold"]).float()
     #     predict_test_y = predict_test_y.detach().cpu().numpy()

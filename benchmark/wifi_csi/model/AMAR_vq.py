@@ -13,7 +13,6 @@ from torch.utils.data import TensorDataset, DataLoader
 from ptflops import get_model_complexity_info
 from model.modules.molecules import Backbone, Transformer_Encoder, TransformerDecoder, VectorQuantizer, ResidualVectorQuantizer
 from model.losses.supervised_loss import HungarianMatchingLoss
-from train_vq import train as train_vq_func
 from train_rvq import train as train_rvq_func
 from preset import preset
 from utils import *

@@ -11,6 +11,7 @@ from .cnn_1d import run_cnn_1d
 from .cnn_2d import run_cnn_2d
 from .cnn_lstm import run_cnn_lstm
 from .ablstm import run_ablstm
+from .ablstm_count_pred import run_ablstm_count_pred
 from .that_count_pred import run_that_count_pred
 from .that import run_that
 from .dual_band import run_dual_band
@@ -32,6 +33,7 @@ __all__ = ["run_strf",
            "run_cnn_2d",
            "run_cnn_lstm",
            "run_ablstm",
+           "run_ablstm_count_pred",
            "run_that",
            "run_dual_band",
            "run_that_multihead",
