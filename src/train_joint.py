@@ -1,7 +1,6 @@
 """
 [file]          train.py
-[description]   function to train WiFi-based models
-"""
+[description]   training for multiSenseX"""
 #
 ##
 import time
@@ -204,23 +203,6 @@ def train(model: Module,
               "- Recall %.6f" % dict_error_test_loc['recall'],
               "- F1 Score %.6f" % dict_error_test_loc['f1_score'])
 
-        # # Early stopping check - consider both activity and location performance
-        # if ((dict_error_test_act['f1_score'] > var_best_f1_score_act and
-        #      dict_error_test_act['perfect_prediction_percentage'] > var_best_PPP_act) or
-        #         (dict_error_test_loc['f1_score'] > var_best_f1_score_loc and
-        #          dict_error_test_loc['perfect_prediction_percentage'] > var_best_PPP_loc)):
-        #
-        #     # Update best scores
-        #     var_best_PPP_act = max(var_best_PPP_act, dict_error_test_act['perfect_prediction_percentage'])
-        #     var_best_f1_score_act = max(var_best_f1_score_act, dict_error_test_act['f1_score'])
-        #     var_best_PPP_loc = max(var_best_PPP_loc, dict_error_test_loc['perfect_prediction_percentage'])
-        #     var_best_f1_score_loc = max(var_best_f1_score_loc, dict_error_test_loc['f1_score'])
-        #
-        #     var_best_weight = deepcopy(model.state_dict())
-        #     var_epoch_saved = var_epoch
-        #     counter = 0  # Reset counter
-        # else:
-        #     counter += 1  # Increment counter
         if (dict_error_test_act['f1_score'] > var_best_f1_score_act and
                 dict_error_test_act['perfect_prediction_percentage'] > var_best_PPP_act):
 
