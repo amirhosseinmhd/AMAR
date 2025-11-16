@@ -8,9 +8,8 @@ import os
 preset = {
     #
     ## define model
-    "model": "AMAR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
-                                 # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT", ABLSTM_COUNT
-                                                              # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD AMAR
+    "model": "ABLSTM_COUNT",                                    #"ABLSTM", "THAT", ABLSTM_COUNT
+                                                              # "THAT_COUNT",  AMAR
                                                             # "AMAR_RVQ"
     # "model": "MLP",
     ## define task

@@ -18,7 +18,7 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import Dataset
 # from train import train
 from configs.preset import preset
-from src.models.AMAR import *
+from src.models.AMAR_WO_RVQ import *
 import wandb
 from torch.optim.lr_scheduler import LambdaLR
 import math

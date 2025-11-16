@@ -21,7 +21,7 @@ import wandb
 
 
 
-class AMAR_MultiUser(nn.Module):
+class AMAR_WO_RVQ(nn.Module):
     def __init__(self, var_x_shape, features_dim = 20, embedding_time_dim=100, num_decoder_layers=12,
                  temp_cross=1, n_attention_heads=2, num_queries=5, dim_feedforward=1024, query_dropout_rate=0.0):
         super().__init__()
@@ -55,7 +55,7 @@ class AMAR_MultiUser(nn.Module):
         return outputs_class
 
 
-def run_that_AMAR(data_train_x,
+def run_AMAR_WO_RVQ(data_train_x,
                      data_train_y,
                      data_test_x,
                      data_test_y,
@@ -124,7 +124,7 @@ def run_that_AMAR(data_train_x,
     result_avg_count_error = []
 
     #
-    var_macs, var_params = get_model_complexity_info(AMAR_MultiUser(var_x_shape,
+    var_macs, var_params = get_model_complexity_info(AMAR_WO_RVQ(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -158,7 +158,7 @@ def run_that_AMAR(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_AMAR = AMAR_MultiUser(var_x_shape,
+        model_AMAR = AMAR_WO_RVQ(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],

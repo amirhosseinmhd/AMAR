@@ -4,42 +4,22 @@
 """
 #
 ##
-from .strf import run_strf
-from .mlp import run_mlp
-from .lstm import run_lstm
-from .cnn_1d import run_cnn_1d
-from .cnn_2d import run_cnn_2d
-from .cnn_lstm import run_cnn_lstm
 from .ablstm import run_ablstm
 from .ablstm_count_pred import run_ablstm_count_pred
 from .that_count_pred import run_that_count_pred
 from .that import run_that
 from .dual_band import run_dual_band
-from .that_multi_head import run_that_multihead
-from .that_count_pred_withSoftMaxConstraint import run_that_count_pred_contrained
-from .that_encoder import run_that_decoder
-from .AMAR import run_that_AMAR
+from .AMAR_WO_RVQ import run_AMAR_WO_RVQ
 from .multi_senseX import run_multi_senseX
-from .multi_user import run_multi_user
 from .AMAR_vq import run_that_AMARRVQ
 
 #
 ##
-__all__ = ["run_strf",
-           "run_mlp",
-           "run_lstm",
-           "run_cnn_1d",
-           "run_cnn_2d",
-           "run_cnn_lstm",
-           "run_ablstm",
+__all__ = ["run_ablstm",
            "run_ablstm_count_pred",
            "run_that",
            "run_dual_band",
-           "run_that_multihead",
            "run_that_count_pred",
-           "run_that_count_pred_contrained",
-           "run_that_decoder",
-           "run_that_AMAR",
+           "run_AMAR_WO_RVQ",
            "run_multi_senseX",
-           "run_multi_user",
            "run_that_AMARRVQ"]

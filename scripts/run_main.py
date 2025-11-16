@@ -38,16 +38,10 @@ def master_splitter(preset, var_task, var_model, var_users):
 
         y = encode_data_y(data_pd_y, var_task)
 
-        if var_model == "THAT_MULTI_HEAD":
-            y = reduce_dataset(y)  # CHECKKKKKKKK HEREEEEEE
-        elif var_model == "THAT_ENCODER" or var_model == "AMAR" or var_model== "multi_user" or var_model=="AMAR_VQ" or var_model=="AMAR_RVQ" or var_model == "JEPA_HYB" or var_model == "JEPA":
-            y = reduce_dataset(y, preset["nn"]["num_obj_queries"])  # CHECKKKKKKKK HEREEEEEE
-        elif var_model == "THAT_COUNT_CONSTRAINED":
-            y_red = reduce_dataset(y)
-            y = y_red.sum(axis=1)
 
-        else:
-            pass
+        if var_model == "AMAR_WO_RVQ"  or var_model=="AMAR_RVQ": # here we pad with zeros
+            y = reduce_dataset(y, preset["nn"]["num_obj_queries"]) 
+
 
         X_train, X_test, y_train, y_test = train_test_split(X, y,
                                                             test_size=0.2,
@@ -117,28 +111,13 @@ def run():
     data_train_x, data_test_x, data_train_y, data_test_y = master_splitter(preset, var_task, var_model, var_users)
     #
 
-    # #
-    ## select a WiFi-based model
-    if var_model == "ST-RF": run_model = run_strf
     #
-    elif var_model == "MLP": run_model = run_mlp
-    #
-    elif var_model == "LSTM": run_model = run_lstm
-    #
-    elif var_model == "CNN-1D": run_model = run_cnn_1d
-    #
-    elif var_model == "CNN-2D": run_model = run_cnn_2d
-    #
-    elif var_model == "CLSTM": run_model = run_cnn_lstm
-    #
-    elif var_model == "ABLSTM": run_model = run_ablstm
+    if var_model == "ABLSTM": run_model = run_ablstm
     #
     elif var_model == "ABLSTM_COUNT": run_model = run_ablstm_count_pred
     #
     elif var_model == "THAT": run_model = run_that
-    #
-    elif var_model == "SSL": run_model = run_ssl
-    #
+    #    #
     elif var_model == "THAT_COUNT": run_model = run_that_count_pred
     #
     elif var_model == "THAT_MULTI_HEAD": run_model = run_that_multihead
@@ -147,15 +126,7 @@ def run():
 
     elif var_model == "THAT_ENCODER": run_model = run_that_decoder
 
-    elif var_model == "AMAR": run_model = run_that_AMAR
-
-    elif var_model == "multi_user": run_model = run_multi_user
-
-    elif var_model == "JEPA_HYB": run_model =  run_JEPA_hyb
-
-    elif var_model == "JEPA": run_model = run_JEPA
-
-    # elif var_model == "AMAR_VQ": run_model = run_that_AMARVQ
+    elif var_model == "AMAR_WO_RVQ": run_model = run_AMAR_WO_RVQ
 
     elif var_model == "AMAR_RVQ": run_model = run_that_AMARRVQ
 
