@@ -1,4 +1,4 @@
-# AMAR: Efficient Attention-Based Multi-User ActivityRecognition from Wi-Fi CSI
+# AMAR: Efficient Attention-Based Multi-User Activity Recognition from Wi-Fi CSI
 
 This repository contains the implementation of AMAR model submitted to IEEE TNNLS
 
