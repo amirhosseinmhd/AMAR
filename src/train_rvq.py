@@ -157,49 +157,5 @@ def train(model: Module,
             var_best_weight = deepcopy(model.state_dict())
             var_epoch_saved = var_epoch
 
-        if var_epoch % 20 == 0:
-            with torch.no_grad():
-                # RVQ statistics for each layer
-                for layer_idx, indices in enumerate(all_valid_indices):
-                    codebook_indices = indices.cpu().numpy().flatten()
-
-                    # 1. Codebook Usage
-                    unique_indices, counts = np.unique(codebook_indices, return_counts=True)
-                    codebook_usage = {f"code_{i}": count for i, count in zip(unique_indices, counts)}
-
-                    # 2. Percentage of Codebook Used
-                    percent_codebook_used = (len(unique_indices) / model.rvq_layer.num_embeddings) * 100
-
-                    # 3. Representation Diversity (Per Sample)
-                    unique_symbols_per_sample = [len(np.unique(s)) for s in indices.cpu().numpy()]
-                    avg_unique_symbols = np.mean(unique_symbols_per_sample)
-
-                    # 4. Codebook Usage Rank (Top 5)
-                    sorted_usage = sorted(zip(unique_indices, counts), key=lambda x: x[1], reverse=True)
-                    top_5_symbols = {f"rank_{i+1}": {"index": int(idx), "count": int(cnt)} for i, (idx, cnt) in enumerate(sorted_usage[:5])}
-
-                    # Create a wandb.Table for the top 5 symbols
-                    top_5_table = wandb.Table(columns=["Rank", "Symbol Index", "Count"])
-                    for i, (idx, cnt) in enumerate(sorted_usage[:5]):
-                        top_5_table.add_data(f"Rank {i+1}", int(idx), int(cnt))
-
-                    # Logging to wandb for each RVQ layer
-                    wandb.log({
-                        f"rvq_stats/layer_{layer_idx}/percent_codebook_used": percent_codebook_used,
-                        f"rvq_stats/layer_{layer_idx}/avg_unique_symbols_per_sample": avg_unique_symbols,
-                        f"rvq_stats/layer_{layer_idx}/codebook_usage": wandb.plot.bar(
-                            wandb.Table(columns=["symbol_index", "count"], rows=list(zip(unique_indices, counts))),
-                            "symbol_index", "count", title=f"RVQ Layer {layer_idx} Codebook Usage"
-                        ),
-                        f"rvq_stats/layer_{layer_idx}/top_5_used_symbols": top_5_table
-                    }, step=var_epoch)
-
-                    # Printing to console
-                    print(f"--- RVQ Layer {layer_idx} Stats at Epoch {var_epoch} ---")
-                    print(f"  Percentage of Codebook Used: {percent_codebook_used:.2f}%")
-                    print(f"  Average Unique Symbols per Sample: {avg_unique_symbols:.2f}")
-                    print(f"  Top 5 Most Used Symbols: {top_5_symbols}")
-                    print("-" * 30)
-
     print(f"Epoch that the model was saved {var_epoch_saved}")
     return var_best_weight

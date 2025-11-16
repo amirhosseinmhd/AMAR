@@ -19,7 +19,6 @@ from .that_multi_head import run_that_multihead
 from .that_count_pred_withSoftMaxConstraint import run_that_count_pred_contrained
 from .that_encoder import run_that_decoder
 from .AMAR import run_that_AMAR
-from .crowd_counting_THAT import run_crowd_counting_THAT
 from .multi_senseX import run_multi_senseX
 from .multi_user import run_multi_user
 from .AMAR_vq import run_that_AMARRVQ
@@ -41,7 +40,6 @@ __all__ = ["run_strf",
            "run_that_count_pred_contrained",
            "run_that_decoder",
            "run_that_AMAR",
-           "run_crowd_counting_THAT",
            "run_multi_senseX",
            "run_multi_user",
            "run_that_AMARRVQ"]
