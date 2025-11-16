@@ -8,14 +8,13 @@ import os
 preset = {
     #
     ## define model
-    "wandb_name": "00",
-    "model": "ABLSTM",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
+    "model": "AMAR_RVQ",                                    # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT",
                                  # "ST-RF", "MLP", "LSTM", "CNN-1D", "CNN-2D", "CLSTM", "ABLSTM", "THAT", ABLSTM_COUNT
                                                               # "THAT_COUNT", "THAT_ENCODER", THAT_COUNT_CONSTRAINED, THAT_MULTI_HEAD AMAR
-                                                            #JOINT_AMAR, JEPA_HYB, "JEPA", "AMAR_VQ", "AMAR_RVQ"
+                                                            # "AMAR_RVQ"
     # "model": "MLP",
     ## define task
-    "task": "activity",                                 # "identity", "activity", "location"
+    "task": "activity",                                 #  "activity"
     #
     ## number of repeated experiments
     "repeat": 2,
@@ -54,14 +53,11 @@ preset = {
         },
         # Loss function parameters
         "loss": {
-            "SSL_coeff": 0.2 ,
-            "type": "HungarianMatchingLoss",  # type of loss function
             "cost_class_weight": 1.0,  # weight for classification cost
             "aux_loss_weight": 0.25,  # weight for auxiliary losses
             "label_smoothing": 0.2,  # label smoothing factor
             "class_imbalance_weight": 0.25
         },
-        "KMEANS_Initialization": False,
         "cross_attention_temp": 1,
         "weight_decay": 1e-4,
         "num_obj_queries": 6,
@@ -74,34 +70,11 @@ preset = {
         "query_dropout_rate": 0,
         "commitment_cost": 0.5,
         "num_codes": 16,
-        "num_rvq_layers":4,  # Number of RVQ layers (V+1 in the formula)
+        "num_rvq_layers":4,  # Number of RVQ layers 
         "quantization_dropout": 0.3,  # Dropout rate for quantization layers
 
 },
-    "jepa": {
-        "segment_length": 48,              # Number of timestamps in each segment.
-        "num_segments_total_view": 1,      # Total number of segments considered in a single processing view.
-        "encoder_layers": 6,                # Number of layers in the Transformer Encoder.
-        "ema_decay": 0.998,                 # Decay rate for the Exponential Moving Average of target encoder weights.
-        "num_target_blocks":4,             # Number of target blocks to sample and predict.
-        "target_block_size_segments": 20,    # Number of contiguous segments forming a single target block.
-
-        # --- Predictor Specific Configurations ---
-        # The "narrow" dimension of the predictor's internal Transformer.
-        "predictor_d_model": 52,
-        "predictor_attention_heads": 4,       # Number of attention heads in the Predictor's Transformer.
-        "predictor_layers": 3,                # Number of layers in the Predictor's Transformer.
-        "sampling_weight_decay_factor": 0.9,  # Factor to reduce weights after sampling
-        "sampling_weight_reset_interval": 100,  # Reset weights every N times
-        "log_sampling_stats_interval": 100,  # Log sampling statistics every N batches
-        "loss": {
-            "prediction_coef": 1.0,  # Keep JEPA prediction loss at full strength
-            "vicreg_coef": 0.1,  # Much smaller - VICReg is regularization, not main loss
-            "vicreg_sim_coef": 25.0,  # NEW: Similarity between different blocks
-            "vicreg_std_coef": 25.0,  # Variance regularization
-            "vicreg_cov_coef": 1.0  # Covariance regularization
-        }
-        },
+    
 
     ## encoding of activities and locations
     "encoding": {
