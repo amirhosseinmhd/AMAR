@@ -39,10 +39,7 @@ multi_modal_CSI/
 │
 ├── scripts/                   # Executable scripts
 │   ├── run_main.py           # Main experiment runner
-│   ├── run_main_jointActLoc.py  # Joint activity-location experiments
-│   ├── run_dualband.py       # Dual-band WiFi experiments
-│   ├── inference_only.py     # Inference script
-│   └── run.sh                # Batch execution script
+│   └──run_main_jointActLoc.py  # For running MultiSenseX 
 │
 ├── notebooks/                 # Jupyter notebooks for analysis
 │   └── InspectingOutput.ipynb
