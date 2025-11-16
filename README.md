@@ -1,6 +1,6 @@
-# Multi-Modal CSI: WiFi-based Human Activity Recognition
+# AMAR: Efficient Attention-Based Multi-User ActivityRecognition from Wi-Fi CSI
 
-This repository contains the implementation of WiFi CSI (Channel State Information) based models for multi-user human activity recognition,
+This repository contains the implementation of AMAR model submitted to IEEE TNNLS
 
 ## Table of Contents
 - [Project Structure](#project-structure)
