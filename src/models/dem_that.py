@@ -1,6 +1,6 @@
 """
-[file]          that.py
-[description]   implement and evaluate WiFi-based model THAT_ENCODER
+[file]          dem_that.py
+[description]   implement the encoder based on THAT and having smooth L1 loss for direct error minimization
                 https://github.com/windofshadow/THAT
 """
 #
@@ -177,7 +177,7 @@ class Encoder(torch.nn.Module):
 ## ------------------------------------------------------------------------------------------ ##
 #
 ##
-class THAT_COUNT_PRED(torch.nn.Module):
+class DEM_THAT(torch.nn.Module):
     #
     ##
     def __init__(self, 
@@ -185,7 +185,7 @@ class THAT_COUNT_PRED(torch.nn.Module):
                  var_y_shape):
         #
         ##
-        super(THAT_COUNT_PRED, self).__init__()
+        super(DEM_THAT, self).__init__()
         #
         var_dim_feature = var_x_shape[-1]
         var_dim_time = var_x_shape[-2]
@@ -333,7 +333,7 @@ class THAT_COUNT_PRED(torch.nn.Module):
         return total_loss
 #
 ##
-def run_that_count_pred(data_train_x,
+def run_DEM_THAT(data_train_x,
              data_train_y,
              data_test_x,
              data_test_y,
@@ -389,7 +389,7 @@ def run_that_count_pred(data_train_x,
 
     #
     ##
-    var_macs, var_params = get_model_complexity_info(THAT_COUNT_PRED(var_x_shape, var_y_shape),
+    var_macs, var_params = get_model_complexity_info(DEM_THAT(var_x_shape, var_y_shape),
                                                      var_x_shape, as_strings = False)
     #
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -410,19 +410,9 @@ def run_that_count_pred(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_that = THAT_COUNT_PRED(var_x_shape, var_y_shape).to(device)
+        model_that = DEM_THAT(var_x_shape, var_y_shape).to(device)
         #
-        if preset.get("pretrained_path"):
-            model_that, param_groups = load_model_components(
-                model_that,
-                preset["pretrained_path"],
-                preset["nn"]["lr"],
-                preset.get("transfer_scenario"),
-                device
-            )
-            optimizer = torch.optim.Adam(param_groups)
-        else:
-            optimizer = torch.optim.Adam(model_that.parameters(),
+        optimizer = torch.optim.Adam(model_that.parameters(),
                                          lr=preset["nn"]["lr"],
                                          weight_decay=preset["nn"]["weight_decay"])
 
@@ -455,8 +445,8 @@ def run_that_count_pred(data_train_x,
         #
         with torch.no_grad():
             predict_test_y = model_that(torch.from_numpy(data_test_x).to(device))
-        #
-        # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
+
+
         predict_test_y = predict_test_y.detach().cpu().numpy()
         #
         var_time_2 = time.time()

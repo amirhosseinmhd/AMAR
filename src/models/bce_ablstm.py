@@ -1,6 +1,7 @@
 """
-[file]          ablstm.py
-[description]   implement and evaluate WiFi-based model ABLSTM
+[file]          bce_ablstm.py
+[description]   implement the encoder based on ABLSTM and having BCE cross enthropy based on WiMANS paper
+                https://github.com/huangshk/WiMANS
 """
 #
 ##
@@ -95,7 +96,7 @@ class ABLSTM(torch.nn.Module):
 
 #
 ##
-def run_ablstm(data_train_x,
+def run_bce_ablstm(data_train_x,
                data_train_y,
                data_test_x,
                data_test_y,
@@ -133,7 +134,6 @@ def run_ablstm(data_train_x,
     var_x_shape, var_y_shape = data_train_x[0].shape, data_train_y[0].reshape(-1).shape
     #
     data_train_set = TensorDataset(torch.from_numpy(data_train_x), torch.from_numpy(data_train_y))
-    # data_test_set = TensorDataset(torch.from_numpy(data_test_x), torch.from_numpy(data_test_y))
     data_valid_set = TensorDataset(torch.from_numpy(data_valid_x), torch.from_numpy(data_valid_y))
 
     #

@@ -43,7 +43,7 @@ def train(model: Module,
           var_epochs: int,
           device: device,
           var_mode: str,
-          patience: int = 150):  # Added patience parameter
+          patience: int = 150): 
     var_epoch_saved = 0
     g = torch.Generator()
     data_train_loader = DataLoader(data_train_set, var_batch_size, shuffle=True, pin_memory=True, generator=g)
@@ -78,8 +78,8 @@ def train(model: Module,
         model.train()
         total_batches = len(data_train_loader)
 
-        # Adjust learning rate for feature_extractor after 50 epochs
-        if var_epoch == 50 and not preset.get("pretrained_path"):
+       
+        if var_epoch == 50: #scheduler for better convergence
             for param_group in optimizer.param_groups:
                 if param_group.get('name') == 'feature_extractor':
                     param_group['lr'] /= 5
@@ -129,9 +129,7 @@ def train(model: Module,
             predict_valid_y = predict_valid_y.detach().cpu().numpy()
 
             dict_error_valid = performance_metrics(data_valid_y, predict_valid_y, var_mode, var_threshold)
-        #     # Log attention weights every N batches
-        # if preset["model"] == "AMAR"  and var_epoch % 40 == 0:
-        #     log_attention_weights(model, np.argmax(predict_valid_y[-1], axis=-1), np.argmax(data_valid_y, axis=-1), var_epoch)
+
         if preset["model"] == "AMAR":
             layers_idxs = ["layer_" +str(preset["nn"]["num_decoder_layers"] - 1)]
             for layer_idx in layers_idxs:

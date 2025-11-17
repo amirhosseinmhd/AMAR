@@ -345,73 +345,6 @@ class Transformer_Encoder(torch.nn.Module):
         return var_embedding
 
 
-class Encoder(torch.nn.Module):
-    """
-    Enhanced custom encoder layer with masking support and improved FFN.
-    """
-
-    def __init__(self, var_dim_feature, var_num_head=10):
-        super(Encoder, self).__init__()
-
-        # First layer norm (pre-norm for attention)
-        self.layer_norm_0 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-
-        # Multi-head attention
-        self.layer_attention = torch.nn.MultiheadAttention(
-            var_dim_feature, var_num_head, batch_first=True, dropout=0.2
-        )
-
-        # Dropout after attention
-        self.layer_dropout_0 = torch.nn.Dropout(0.2)
-
-        # Second layer norm (pre-norm for FFN)
-        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
-
-        # Enhanced FFN with 4x expansion (standard transformer practice)
-        self.ffn = torch.nn.Sequential(
-            torch.nn.Linear(var_dim_feature, var_dim_feature),  # Expand
-            torch.nn.ReLU(),  # Standard activation
-            torch.nn.Dropout(0.2),
-            torch.nn.Linear(var_dim_feature, var_dim_feature)  # Contract
-        )
-
-        # Dropout after FFN
-        self.layer_dropout_1 = torch.nn.Dropout(0.2)
-
-    def forward(self, var_input, src_key_padding_mask=None):
-        """
-        Args:
-            var_input: Input tensor of shape (batch_size, seq_len, d_model)
-            src_key_padding_mask: Mask for padded positions (True for padded positions)
-        """
-        # Self-attention block with pre-norm
-        var_t = self.layer_norm_0(var_input)
-
-        # Apply attention with masking support
-        if src_key_padding_mask is not None:
-            var_t, _ = self.layer_attention(
-                var_t, var_t, var_t,
-                key_padding_mask=src_key_padding_mask
-            )
-        else:
-            var_t, _ = self.layer_attention(var_t, var_t, var_t)
-
-        var_t = self.layer_dropout_0(var_t)
-
-        # First residual connection
-        var_t = var_t + var_input
-
-        # FFN block with pre-norm
-        var_s = self.layer_norm_1(var_t)
-        var_s = self.ffn(var_s)
-        var_s = self.layer_dropout_1(var_s)
-
-        # Second residual connection
-        var_output = var_s + var_t
-
-        return var_output
-
-
 class TransformerDecoder(nn.Module):
     def __init__(self, d_model=20, nhead=2, num_decoder_layers=9, num_queries=5, dim_feedforward=512, dropout=0.1,
                  temp_cross_attention=1, query_dropout_rate=0.0):
@@ -542,4 +475,74 @@ class TransformerDecoderLayer(nn.Module):
         tgt = self.norm3(tgt)
 
         return tgt
+
+
+
+
+class Encoder(torch.nn.Module):
+    """
+    Enhanced custom encoder layer with masking support and improved FFN.
+    Used for THAT model
+    """
+
+    def __init__(self, var_dim_feature, var_num_head=10):
+        super(Encoder, self).__init__()
+
+        # First layer norm (pre-norm for attention)
+        self.layer_norm_0 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
+
+        # Multi-head attention
+        self.layer_attention = torch.nn.MultiheadAttention(
+            var_dim_feature, var_num_head, batch_first=True, dropout=0.2
+        )
+
+        # Dropout after attention
+        self.layer_dropout_0 = torch.nn.Dropout(0.2)
+
+        # Second layer norm (pre-norm for FFN)
+        self.layer_norm_1 = torch.nn.LayerNorm(var_dim_feature, eps=1e-6)
+
+        # Enhanced FFN with 4x expansion (standard transformer practice)
+        self.ffn = torch.nn.Sequential(
+            torch.nn.Linear(var_dim_feature, var_dim_feature),  # Expand
+            torch.nn.ReLU(),  # Standard activation
+            torch.nn.Dropout(0.2),
+            torch.nn.Linear(var_dim_feature, var_dim_feature)  # Contract
+        )
+
+        # Dropout after FFN
+        self.layer_dropout_1 = torch.nn.Dropout(0.2)
+
+    def forward(self, var_input, src_key_padding_mask=None):
+        """
+        Args:
+            var_input: Input tensor of shape (batch_size, seq_len, d_model)
+            src_key_padding_mask: Mask for padded positions (True for padded positions)
+        """
+        # Self-attention block with pre-norm
+        var_t = self.layer_norm_0(var_input)
+
+        # Apply attention with masking support
+        if src_key_padding_mask is not None:
+            var_t, _ = self.layer_attention(
+                var_t, var_t, var_t,
+                key_padding_mask=src_key_padding_mask
+            )
+        else:
+            var_t, _ = self.layer_attention(var_t, var_t, var_t)
+
+        var_t = self.layer_dropout_0(var_t)
+
+        # First residual connection
+        var_t = var_t + var_input
+
+        # FFN block with pre-norm
+        var_s = self.layer_norm_1(var_t)
+        var_s = self.ffn(var_s)
+        var_s = self.layer_dropout_1(var_s)
+
+        # Second residual connection
+        var_output = var_s + var_t
+
+        return var_output
 

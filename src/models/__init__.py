@@ -1,25 +1,23 @@
 """
 [file]          __init__.py
-[description]   directory of WiFi-based models
+[description]   directory of models
 """
 #
 ##
-from .ablstm import run_ablstm
-from .ablstm_count_pred import run_ablstm_count_pred
-from .that_count_pred import run_that_count_pred
-from .that import run_that
-from .dual_band import run_dual_band
+from .bce_ablstm import run_bce_ablstm
+from .dem_ablstm import run_dem_ablstm
+from .dem_that import run_DEM_THAT
+from .bce_that import run_bce_that
 from .AMAR_WO_RVQ import run_AMAR_WO_RVQ
 from .multi_senseX import run_multi_senseX
-from .AMAR_vq import run_that_AMARRVQ
+from .AMAR import run_AMAR
 
 #
 ##
-__all__ = ["run_ablstm",
-           "run_ablstm_count_pred",
-           "run_that",
-           "run_dual_band",
-           "run_that_count_pred",
+__all__ = ["run_bce_ablstm",
+           "run_dem_ablstm",
+           "run_bce_that",
+           "run_DEM_THAT",
            "run_AMAR_WO_RVQ",
            "run_multi_senseX",
-           "run_that_AMARRVQ"]
+           "run_AMAR"]

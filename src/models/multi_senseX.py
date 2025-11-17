@@ -3,7 +3,7 @@ import time
 from torch.utils.data import TensorDataset
 from ptflops import get_model_complexity_info
 import copy
-from src.models.that import THAT
+from src.models.bce_that import THAT
 from src.utils import *
 import wandb
 import torch

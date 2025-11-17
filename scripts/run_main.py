@@ -39,7 +39,7 @@ def master_splitter(preset, var_task, var_model, var_users):
         y = encode_data_y(data_pd_y, var_task)
 
 
-        if var_model == "AMAR_WO_RVQ"  or var_model=="AMAR_RVQ": # here we pad with zeros
+        if var_model == "AMAR_WO_RVQ" or var_model=="AMAR": # here we pad with zeros
             y = reduce_dataset(y, preset["nn"]["num_obj_queries"]) 
 
 
@@ -87,7 +87,7 @@ def run():
     [description]
     : run WiFi-based models
     """
-    SEED = 103 
+    SEED = 103 # Ensuring the results are reproducible
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
@@ -104,31 +104,23 @@ def run():
     var_repeat = var_args.repeat
     var_users = [u.strip() for u in var_args.users.split(',')]
 
-    preset["repeat"] = 1 if not preset["pretrained_path"] else preset["repeat"] # if we want to pretrain the model we
-    #                                                                           # need only one repeat
 
     # Ensuring there is no data leakage while doing splits.
     data_train_x, data_test_x, data_train_y, data_test_y = master_splitter(preset, var_task, var_model, var_users)
     #
 
     #
-    if var_model == "ABLSTM": run_model = run_ablstm
+    if var_model == "ABLSTM": run_model = run_bce_ablstm
     #
-    elif var_model == "ABLSTM_COUNT": run_model = run_ablstm_count_pred
+    elif var_model == "DEM_ABLSTM": run_model = run_dem_ablstm
     #
-    elif var_model == "THAT": run_model = run_that
+    elif var_model == "BCE_THAT": run_model = run_bce_that
     #    #
-    elif var_model == "THAT_COUNT": run_model = run_that_count_pred
-    #
-    elif var_model == "THAT_MULTI_HEAD": run_model = run_that_multihead
-    #
-    elif var_model == "THAT_COUNT_CONSTRAINED": run_model = run_that_count_pred_contrained
-
-    elif var_model == "THAT_ENCODER": run_model = run_that_decoder
+    elif var_model == "DEM_THAT": run_model = run_DEM_THAT
 
     elif var_model == "AMAR_WO_RVQ": run_model = run_AMAR_WO_RVQ
 
-    elif var_model == "AMAR_RVQ": run_model = run_that_AMARRVQ
+    elif var_model == "AMAR": run_model = run_AMAR
 
     else:
         raise Exception("Not valid name for model")

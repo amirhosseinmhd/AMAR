@@ -1,7 +1,6 @@
 """
-[file]          ablstm_count_pred.py
-[description]   implement and evaluate WiFi-based model ABLSTM for count prediction
-                Uses ABLSTM backbone instead of THAT encoder
+[file]          dem_ablstm.py
+[description]   implement the encoder based on ABLSTM and having smooth L1 loss for direct error minimization
 """
 #
 ##
@@ -27,7 +26,7 @@ import wandb
 ## ------------------------------------------------------------------------------------------ ##
 ## ------------------------------------ ABLSTM COUNT PRED ----------------------------------- ##
 ## ------------------------------------------------------------------------------------------ ##
-class ABLSTM_COUNT_PRED(torch.nn.Module):
+class DEM_ABLSTM(torch.nn.Module):
     #
     ##
     def __init__(self,
@@ -35,7 +34,7 @@ class ABLSTM_COUNT_PRED(torch.nn.Module):
                  var_y_shape):
         #
         ##
-        super(ABLSTM_COUNT_PRED, self).__init__()
+        super(DEM_ABLSTM, self).__init__()
         #
         var_dim_input = var_x_shape[-1]
         var_dim_time = var_x_shape[-2]
@@ -102,14 +101,14 @@ class ABLSTM_COUNT_PRED(torch.nn.Module):
 
 #
 ##
-def run_ablstm_count_pred(data_train_x,
+def run_dem_ablstm(data_train_x,
                           data_train_y,
                           data_test_x,
                           data_test_y,
                           var_repeat = 10):
     """
     [description]
-    : run WiFi-based model ABLSTM_COUNT_PRED
+    : run WiFi-based model DEM_ABLSTM
     [parameter]
     : data_train_x: numpy array, CSI amplitude to train model
     : data_train_y: numpy array, labels to train model
@@ -158,7 +157,7 @@ def run_ablstm_count_pred(data_train_x,
 
     #
     ##
-    var_macs, var_params = get_model_complexity_info(ABLSTM_COUNT_PRED(var_x_shape, var_y_shape),
+    var_macs, var_params = get_model_complexity_info(DEM_ABLSTM(var_x_shape, var_y_shape),
                                                      var_x_shape, as_strings = False)
     #
     print("Parameters:", var_params, "- FLOPs:", var_macs * 2)
@@ -168,7 +167,7 @@ def run_ablstm_count_pred(data_train_x,
         #
         ##
         print("Repeat", var_r)
-        name_run = f"ABLSTM_COUNT_{var_r}_" + "_".join(preset["data"]["environment"])
+        name_run = f"DEM_ABLSTM_{var_r}_" + "_".join(preset["data"]["environment"])
 
         run = wandb.init(
             project="FINAL_FINAL_EEEFINAL",
@@ -179,7 +178,7 @@ def run_ablstm_count_pred(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_ablstm = ABLSTM_COUNT_PRED(var_x_shape, var_y_shape).to(device)
+        model_ablstm = DEM_ABLSTM(var_x_shape, var_y_shape).to(device)
         #
         if preset.get("pretrained_path"):
             model_ablstm, param_groups = load_model_components(

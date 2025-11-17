@@ -21,7 +21,7 @@ import wandb
 
 
 
-class AMAR_MultiUser_RVQ(nn.Module):
+class AMAR(nn.Module):
     """
     AMAR model with Residual Vector Quantization (RVQ).
     Architecture: CNN → RVQ → TransformerEncoder → Decoder
@@ -92,7 +92,7 @@ class AMAR_MultiUser_RVQ(nn.Module):
 
 
 
-def run_that_AMARRVQ(data_train_x,
+def run_AMAR(data_train_x,
                      data_train_y,
                      data_test_x,
                      data_test_y,
@@ -152,7 +152,7 @@ def run_that_AMARRVQ(data_train_x,
     result_avg_count_error = []
 
     # Calculate model complexity for RVQ model
-    var_macs, var_params = get_model_complexity_info(AMAR_MultiUser_RVQ(var_x_shape,
+    var_macs, var_params = get_model_complexity_info(AMAR(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -171,10 +171,10 @@ def run_that_AMARRVQ(data_train_x,
         ##
         var_mode = "multi_head"
         if preset["pretrained_path"]:
-            name_run = f"AMAR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
+            name_run = f"AMAR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + preset["transfer_scenario"]
         else:
             pretrained_state = "NPT"
-            name_run = f"AMAR_RVQ_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
+            name_run = f"AMAR_{var_r}_" + "_".join(preset["data"]["environment"]) + "_" + pretrained_state 
         print("Repeat", var_r)
         run = wandb.init(
             project="REALREAL_FINAL_RVQ",
@@ -185,7 +185,7 @@ def run_that_AMARRVQ(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_AMARRVQ = AMAR_MultiUser_RVQ(var_x_shape,
+        model_AMAR = AMAR(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -198,22 +198,22 @@ def run_that_AMARRVQ(data_train_x,
                                     commitment_cost=preset["nn"]["commitment_cost"],
                                     num_rvq_layers=preset["nn"]["num_rvq_layers"]).to(device)
 
-        # model_AMARRVQ.feature_extractor = torch.compile(model_AMARRVQ.feature_extractor)
+        # model_AMAR.feature_extractor = torch.compile(model_AMAR.feature_extractor)
         #
         ##
         # Separate learning rates: 0.1x for codebook, 1x for other parameters
         codebook_params = []
         other_params = []
         
-        for name, param in model_AMARRVQ.named_parameters():
+        for name, param in model_AMAR.named_parameters():
             if 'rvq_layer' in name and 'embedding.weight' in name:
                 codebook_params.append(param)
             else:
                 other_params.append(param)
         
         if preset.get("pretrained_path"):
-            model_AMARRVQ, param_groups = load_model_components(
-                model=model_AMARRVQ,
+            model_AMAR, param_groups = load_model_components(
+                model=model_AMAR,
                 load_path=preset["pretrained_path"],
                 lr = preset["nn"]["lr"],
                 scenario=preset.get("transfer_scenario"),
@@ -242,7 +242,7 @@ def run_that_AMARRVQ(data_train_x,
         #
         ## ---------------------------------------- Train -----------------------------------------
         #
-        var_best_weight = train_rvq_func(model=model_AMARRVQ,
+        var_best_weight = train_rvq_func(model=model_AMAR,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
@@ -254,18 +254,18 @@ def run_that_AMARRVQ(data_train_x,
                                 var_mode=var_mode)
         # Save model components based on scenario
         if preset.get("save_model"):
-            save_model_components(preset, model_AMARRVQ)
+            save_model_components(preset, model_AMAR)
         #
         var_time_1 = time.time()
         #
 
         ## ---------------------------------------- Test ------------------------------------------
         #
-        model_AMARRVQ.load_state_dict(var_best_weight)
+        model_AMAR.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
             data_test_x_tensor = torch.from_numpy(data_test_x).to(device)
-            outputs_class, continuous_emb, quantized_emb, all_indices, all_quantized_layers = model_AMARRVQ(data_test_x_tensor)
+            outputs_class, continuous_emb, quantized_emb, all_indices, all_quantized_layers = model_AMAR(data_test_x_tensor)
         #
         predict_test_y = outputs_class.detach().cpu().numpy()
         #
@@ -381,7 +381,7 @@ def run_that_AMARRVQ(data_train_x,
 
     # Run visualization with the last layer's predictions
     
-    log_random_attention_weights_final(model_AMARRVQ, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    log_random_attention_weights_final(model_AMAR, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
     
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,

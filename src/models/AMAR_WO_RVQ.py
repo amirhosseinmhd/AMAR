@@ -158,7 +158,7 @@ def run_AMAR_WO_RVQ(data_train_x,
         #
         torch.random.manual_seed(var_r + 39)
         #
-        model_AMAR = AMAR_WO_RVQ(var_x_shape,
+        model_AMAR_WO_RVQ = AMAR_WO_RVQ(var_x_shape,
                                     n_attention_heads=preset["nn"]["n_attention_heads"],
                                     features_dim=preset["nn"]["d_embedding"],
                                     embedding_time_dim=preset["nn"]["token_length"],
@@ -170,27 +170,12 @@ def run_AMAR_WO_RVQ(data_train_x,
                                     # pca_embeddings=pca_components
                                     ).to(device)
 
-        model_AMAR.feature_extractor = torch.compile(model_AMAR.feature_extractor)
-        # model_AMAR.decoder = torch.compile(model_AMAR.decoder)        # wandb.watch(
-        #     model_AMAR.feature_extractor,  # Directly target the CNN backbone
-        #     log="all",  # Log gradients and parameters
-        #     log_freq=50,  # Frequency of logging
-        #     log_graph=True  # Optional: visualize computation graph
-        # )
+        model_AMAR_WO_RVQ.feature_extractor = torch.compile(model_AMAR_WO_RVQ.feature_extractor)
 
-        if preset.get("pretrained_path"):
-            model_AMAR, param_groups = load_model_components(
-                model=model_AMAR,
-                load_path=preset["pretrained_path"],
-                lr = preset["nn"]["lr"],
-                scenario=preset.get("transfer_scenario"),
-                device=device
-            )
-            optimizer = torch.optim.Adam(param_groups)
-        else:
-            optimizer = torch.optim.Adam(model_AMAR.parameters(),
-                                         lr=preset["nn"]["lr"],
-                                         weight_decay=preset["nn"]["weight_decay"])
+
+        optimizer = torch.optim.Adam(model_AMAR_WO_RVQ.parameters(),
+                                        lr=preset["nn"]["lr"],
+                                        weight_decay=preset["nn"]["weight_decay"])
 
         loss = HungarianMatchingLoss(
             cost_class_weight=preset["nn"]["loss"]["cost_class_weight"],
@@ -202,7 +187,7 @@ def run_AMAR_WO_RVQ(data_train_x,
         #
         ## ---------------------------------------- Train -----------------------------------------
         #
-        var_best_weight = train(model=model_AMAR,
+        var_best_weight = train(model=model_AMAR_WO_RVQ,
                                 optimizer=optimizer,
                                 loss=loss,
                                 data_train_set=data_train_set,
@@ -212,9 +197,9 @@ def run_AMAR_WO_RVQ(data_train_x,
                                 var_epochs=preset["nn"]["epoch"],
                                 device=device,
                                 var_mode=var_mode)
-        # Save model components based on scenario
+        # Save model components
         if preset.get("save_model"):
-            save_model_components(preset, model_AMAR)
+            save_model_components(preset, model_AMAR_WO_RVQ)
         #
         var_time_1 = time.time()
         #
@@ -222,10 +207,10 @@ def run_AMAR_WO_RVQ(data_train_x,
 
         ## ---------------------------------------- Test ------------------------------------------
         #
-        model_AMAR.load_state_dict(var_best_weight)
+        model_AMAR_WO_RVQ.load_state_dict(var_best_weight)
         #
         with torch.no_grad():
-            predict_test_y = model_AMAR(torch.from_numpy(data_test_x).to(device))
+            predict_test_y = model_AMAR_WO_RVQ(torch.from_numpy(data_test_x).to(device))
         #
         # predict_test_y = torch.clamp(torch.round(predict_test_y), min=0, max=5).float()
         predict_test_y = predict_test_y.detach().cpu().numpy()
@@ -342,7 +327,7 @@ def run_AMAR_WO_RVQ(data_train_x,
 
     # Run visualization with the last layer's predictions
     
-    log_random_attention_weights_final(model_AMAR, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
+    log_random_attention_weights_final(model_AMAR_WO_RVQ, np.argmax(predict_test_y[-1], axis=-1), np.argmax(data_test_y, axis=-1), 1000000000)
     
     viz_stats = visualize_model_performance(
         y_pred=last_layer_predictions,

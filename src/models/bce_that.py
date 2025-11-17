@@ -1,7 +1,8 @@
 """
-[file]          that.py
-[description]   implement and evaluate WiFi-based model THAT_ENCODER
+[file]          bce_that.py
+[description]   implement the encoder based on THAT and having BCE cross enthropy based on WiMANS paper
                 https://github.com/windofshadow/THAT
+                https://github.com/huangshk/WiMANS
 """
 #
 ##
@@ -304,7 +305,7 @@ class THAT(torch.nn.Module):
 
 #
 ##
-def run_that(data_train_x,
+def run_bce_that(data_train_x,
              data_train_y,
              data_test_x,
              data_test_y,

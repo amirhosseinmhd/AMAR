@@ -87,7 +87,7 @@ python scripts/run_main.py
 ### With Custom Parameters
 
 ```bash
-python scripts/run_main.py --model AMAR_RVQ --task activity --repeat 3 --users "0,1,2,3,4,5"
+python scripts/run_main.py --model AMAR --task activity --repeat 3 --users "0,1,2,3,4,5"
 ```
 
 ### Available Arguments
@@ -105,9 +105,9 @@ Edit `configs/preset.py` to set:
 
 ```python
 preset = {
-    "model": "AMAR_RVQ",              # Choose your model
+    "model": "AMAR",              # Choose your model
     "task": "activity",                # activity, identity, or location
-    "repeat": 2,                       # Number of runs
+    "repeat": 8,                       # Number of runs
     "path": {
         "data_x": "/path/to/wifi_csi/amp",        # CSI amplitude data
         "data_y": "/path/to/annotation.csv",       # Annotations
@@ -121,7 +121,7 @@ preset = {
     },
     "nn": {
         "lr": 5e-4,                    # Learning rate
-        "epoch": 1,                    # Training epochs
+        "epoch": 300,                    # Training epochs
         "batch_size": 16,              # Batch size
         # ... more hyperparameters
     }
@@ -132,7 +132,7 @@ preset = {
 
 **Single model experiment:**
 ```bash
-python scripts/run_main.py --model AMAR_RVQ --task activity
+python scripts/run_main.py --model AMAR --task activity
 ```
 
 
@@ -160,7 +160,7 @@ Choose your experimental environment:
 ```python
 "data": {
     "environment": ["empty_room"],      # Options: "empty_room", "classroom", "meeting_room"
-    "wifi_band": ["5"],                 # Options: ["2.4"], ["5"], ["2.4", "5"]
+    "wifi_band": ["5"],                 
     "num_users": ["0","1","2","3","4","5"]
 }
 ```
@@ -172,7 +172,7 @@ Adjust neural network settings in the `nn` section:
 ```python
 "nn": {
     "lr": 5e-4,                        # Learning rate
-    "epoch": 1,                        # Number of epochs
+    "epoch": 300,                        # Number of epochs
     "batch_size": 16,                  # Batch size
     "num_obj_queries": 6,              # Number of object queries (for AMAR models)
     "num_decoder_layers": 6,           # Decoder layers
@@ -186,17 +186,11 @@ Adjust neural network settings in the `nn` section:
 ## Available Models
 
 ### Baseline Models
-- `ST-RF`: Spatio-Temporal Random Forest
-- `MLP`: Multi-Layer Perceptron
-- `LSTM`: Long Short-Term Memory
-- `CNN-1D`: 1D Convolutional Neural Network
-- `CNN-2D`: 2D Convolutional Neural Network
-- `CLSTM`: Convolutional LSTM
 - `ABLSTM`: Attention-based LSTM
 - `ABLSTM_COUNT`: ABLSTM for DEM
 - `THAT`: Transformer-based model
-- `THAT_COUNT`: THAT DEM
-- `AMAR_RVQ`: AMAR with Residual Vector Quantization
+- `DEM_THAT`: THAT DEM
+- `AMAR`: AMAR with Residual Vector Quantization
 
 ## Project Organization
 
