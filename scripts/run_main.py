@@ -110,7 +110,7 @@ def run():
     #
 
     #
-    if var_model == "ABLSTM": run_model = run_bce_ablstm
+    if var_model == "BCE_ABLSTM": run_model = run_bce_ablstm
     #
     elif var_model == "DEM_ABLSTM": run_model = run_dem_ablstm
     #

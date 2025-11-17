@@ -8,9 +8,9 @@ import os
 preset = {
     #
     ## define model
-    "model": "AMAR_WO_RVQ",                                    #"ABLSTM", "BCE_THAT", ABLSTM_COUNT
-                                                              # "DEM_THAT",  AMAR, AMAR_WO_RVQ
-                                                            # 
+    "model": "AMAR_WO_RVQ",                                    #  BCE_ABLSTM, BCE_THAT, DEM_ABLSTM
+                                                              #  DEM_THAT",  AMAR, AMAR_WO_RVQ
+                                                            
     # "model": "MLP",
     ## define task
     "task": "activity",                                 #  "activity"

@@ -187,7 +187,7 @@ Adjust neural network settings in the `nn` section:
 
 ### Baseline Models
 - `ABLSTM`: Attention-based LSTM
-- `ABLSTM_COUNT`: ABLSTM for DEM
+- `DEM_ABLSTM`: ABLSTM for DEM
 - `THAT`: Transformer-based model
 - `DEM_THAT`: THAT DEM
 - `AMAR`: AMAR with Residual Vector Quantization
