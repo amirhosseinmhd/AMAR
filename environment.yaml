@@ -1,5 +1,6 @@
 name: WiMANS
 channels:
+  - conda-forge
   - pytorch
   - nvidia
   - defaults
@@ -40,6 +41,7 @@ dependencies:
   - black=19.10b0=py_0
   - blas=1.0=mkl
   - bleach=4.1.0=pyhd3eb1b0_0
+  - blessed=1.20.0=py39h06a4308_0
   - blinker=1.4=py39h06a4308_0
   - blosc=1.21.0=h8c45485_0
   - bokeh=2.4.2=py39h06a4308_0
@@ -51,9 +53,9 @@ dependencies:
   - brunsli=0.1=h2531618_0
   - bzip2=1.0.8=h7b6447c_0
   - c-ares=1.18.1=h7f8727e_0
-  - ca-certificates=2023.01.10=h06a4308_0
+  - ca-certificates=2025.2.25=h06a4308_0
   - cachetools=4.2.2=pyhd3eb1b0_0
-  - certifi=2022.12.7=py39h06a4308_0
+  - certifi=2025.6.15=py39h06a4308_0
   - cffi=1.15.0=py39hd667e15_1
   - cfitsio=3.470=hf0d0db6_6
   - chardet=4.0.0=py39h06a4308_1003
@@ -153,6 +155,7 @@ dependencies:
   - google-crc32c=1.1.2=py39h27cfd23_0
   - google-resumable-media=1.3.1=pyhd3eb1b0_1
   - googleapis-common-protos=1.53.0=py39h06a4308_0
+  - gpustat=1.1.1=py39h06a4308_0
   - greenlet=1.1.1=py39h295c915_0
   - grpcio=1.42.0=py39hce63b2e_0
   - gst-plugins-base=1.14.0=h8213a91_2
@@ -307,13 +310,14 @@ dependencies:
   - numpy=1.21.5=py39he7a7128_1
   - numpy-base=1.21.5=py39hf524024_1
   - numpydoc=1.2=pyhd3eb1b0_0
+  - nvidia-ml-py=12.535.133=py39h06a4308_0
   - oauthlib=3.2.1=py39h06a4308_0
   - olefile=0.46=pyhd3eb1b0_0
   - oniguruma=6.9.7.1=h27cfd23_0
   - openh264=2.1.1=h4ff587b_0
   - openjpeg=2.4.0=h3ad879b_0
   - openpyxl=3.0.9=pyhd3eb1b0_0
-  - openssl=1.1.1t=h7f8727e_0
+  - openssl=1.1.1w=h7f8727e_0
   - packaging=21.3=pyhd3eb1b0_0
   - pandas=1.4.2=py39h295c915_0
   - pandocfilters=1.5.0=pyhd3eb1b0_0
@@ -361,6 +365,7 @@ dependencies:
   - pyjwt=2.1.0=py39h06a4308_0
   - pylint=2.9.6=py39h06a4308_1
   - pyls-spyder=0.4.0=pyhd3eb1b0_0
+  - pynndescent=0.5.10=py39h06a4308_0
   - pyodbc=4.0.32=py39h295c915_1
   - pyopenssl=21.0.0=pyhd3eb1b0_1
   - pyparsing=3.0.4=pyhd3eb1b0_0
@@ -378,6 +383,7 @@ dependencies:
   - python-lsp-server=1.2.4=pyhd3eb1b0_0
   - python-slugify=5.0.2=pyhd3eb1b0_0
   - python-snappy=0.6.0=py39h2531618_3
+  - python_abi=3.9=2_cp39
   - pytorch=2.0.1=py3.9_cuda11.7_cudnn8.5.0_0
   - pytorch-cuda=11.7=h67b0de4_0
   - pytorch-mutex=1.0=cuda
@@ -443,7 +449,8 @@ dependencies:
   - tbb4py=2021.5.0=py39hd09550d_0
   - tblib=1.7.0=pyhd3eb1b0_0
   - tenacity=8.0.1=py39h06a4308_0
-  - tensorboard=2.6.0=py_0
+  - tensorboard=2.11.0=py39h06a4308_0
+  - tensorboard-data-server=0.6.0=py39hca6d32c_0
   - tensorboard-plugin-wit=1.8.1=py39h06a4308_0
   - terminado=0.13.1=py39h06a4308_0
   - testpath=0.5.0=pyhd3eb1b0_0
@@ -470,9 +477,9 @@ dependencies:
   - typing_extensions=4.1.1=pyh06a4308_0
   - tzdata=2022a=hda174b7_0
   - ujson=5.1.0=py39h295c915_0
+  - umap-learn=0.5.7=py39hf3d152e_1
   - unidecode=1.2.0=pyhd3eb1b0_0
   - unixodbc=2.3.9=h7b6447c_0
-  - urllib3=1.26.9=py39h06a4308_0
   - w3lib=1.21.0=pyhd3eb1b0_0
   - watchdog=2.1.6=py39h06a4308_0
   - wcwidth=0.2.5=pyhd3eb1b0_0
@@ -500,7 +507,17 @@ dependencies:
   - zstd=1.4.9=haebb681_0
   - pip:
     - av==10.0.0
+    - docker-pycreds==0.4.0
+    - gitdb==4.0.11
+    - gitpython==3.1.43
     - opencv-python==4.7.0.72
+    - platformdirs==4.3.6
     - ptflops==0.7
+    - sentry-sdk==2.16.0
+    - setproctitle==1.3.3
+    - smmap==5.0.1
+    - torch-tb-profiler==0.4.3
+    - urllib3==1.26.20
+    - wandb==0.18.3
     - wget==3.2
 prefix: /home/user/anaconda3/envs/WiMANS
