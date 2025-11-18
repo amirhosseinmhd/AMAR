@@ -1,6 +1,13 @@
 # AMAR: Efficient Attention-Based Multi-User Activity Recognition from Wi-Fi CSI
 
-This repository contains the implementation of AMAR model submitted to IEEE TNNLS
+## Introduction
+
+AMAR is a transformer-based framework for recognizing multiple concurrent human activities from Wi-Fi Channel State Information (CSI). It formulates multi-user HAR as a set prediction problem, eliminating the need for prior occupancy knowledge or auxiliary user/location annotations.
+
+**Key Features:**
+- **Set prediction** with learnable query embeddings for concurrent activity detection
+- **Edge-cloud architecture**: Lightweight backbone (0.11M params) + RVQ (99.2% bandwidth reduction)
+- **State-of-the-art performance**: 53.4% F₁-score, 1.72× improvement in perfect prediction rate, 74% lower occupancy error
 
 ## Table of Contents
 - [Project Structure](#project-structure)
@@ -52,19 +59,36 @@ multi_modal_CSI/
 
 ## Installation
 
-### 1. Create Conda Environment
+ Create Conda Environment
 
 ```bash
 conda env create -f environment.yaml
 conda activate AMAR
 ```
+## Dataset Setup
 
-### 2. Verify Installation
-
-```bash
-python -c "import torch; print(torch.__version__)"
-python -c "import wandb; print('wandb installed')"
+Download the WiMANS dataset from [Kaggle](https://www.kaggle.com/datasets/shuokanghuang/wimans) and extract it to the project root. Update the paths in `configs/preset.py`:
+```python
+"path": {
+    "data_x": "dataset/wifi_csi/amp",
+    "data_y": "dataset/annotation.csv",
+    "save": "results/result.json"
+}
 ```
+
+**Sample Data:**
+
+<table align="center">
+  <tr align="center">
+    <td rowspan="2"><b>Sample "act_30_25"</b></td>
+    <td>WiFi CSI (5GHz)</td>
+    <td>Synchronized Video</td>
+  </tr>
+  <tr align="center">
+    <td><img src="visualize/wifi_csi_act_30_25.gif" height="188"/></td>
+    <td><img src="visualize/video_act_30_25.gif" height="188"></td>
+  </tr>
+</table>
 
 ## Quick Start
 
