@@ -22,9 +22,9 @@ class DepthwiseSeparableConv(nn.Module):
 
 
 # Dilated Convolution Block
-class DilatedConvBlock(nn.Module):
+class AtrousConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, dilation_rate):
-        super(DilatedConvBlock, self).__init__()
+        super(AtrousConvBlock, self).__init__()
         self.conv = nn.Conv1d(
             in_channels, out_channels, kernel_size=3, padding=dilation_rate, dilation=dilation_rate
         )
@@ -38,28 +38,6 @@ class DilatedConvBlock(nn.Module):
         return x
 
 
-class Dilated_Blocks(nn.Module):
-    def __init__(self, output_channels):
-        super().__init__()
-        # Parallel dilated convolutions
-        self.dilated_conv1 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=1, padding='same')
-        self.dilated_conv2 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=2, padding='same')
-        self.dilated_conv4 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=4, padding='same')
-        self.dilated_conv8 = nn.Conv1d(output_channels, output_channels // 4, kernel_size=3, dilation=8, padding='same')
-
-        # Remove combine_conv since it's not used
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        # Parallel dilated convolutions
-        out1 = self.relu(self.dilated_conv1(x))
-        out2 = self.relu(self.dilated_conv2(x))
-        out4 = self.relu(self.dilated_conv4(x))
-        out8 = self.relu(self.dilated_conv8(x))
-
-        # Concatenate along channel dimension
-        out_concat = torch.cat([out1, out2, out4, out8], dim=1)
-        return out_concat
 
 
 

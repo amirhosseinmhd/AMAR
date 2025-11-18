@@ -1,7 +1,7 @@
 import math
 from torch import nn
 import torch
-from src.models.modules.elements import DepthwiseSeparableConv, DilatedConvBlock
+from src.models.modules.elements import DepthwiseSeparableConv, AtrousConvBlock
 from configs.preset import preset
 import torch.nn.functional as F
 
@@ -229,9 +229,9 @@ class Backbone(nn.Module):
         self.ds_conv1 = DepthwiseSeparableConv(c_initial, c_initial, kernel_size=5, padding=2, stride=2)
 
         # 3. Hierarchical Dilated Convolutions (no temporal reduction)
-        self.hierarchical_dilated_1 = DilatedConvBlock(c_initial, c_initial, dilation_rate=1)
-        self.hierarchical_dilated_2 = DilatedConvBlock(c_initial, c_initial, dilation_rate=2)
-        self.hierarchical_dilated_3 = DilatedConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
+        self.hierarchical_dilated_1 = AtrousConvBlock(c_initial, c_initial, dilation_rate=1)
+        self.hierarchical_dilated_2 = AtrousConvBlock(c_initial, c_initial, dilation_rate=2)
+        self.hierarchical_dilated_3 = AtrousConvBlock(c_initial, c_hierarchical_out, dilation_rate=4)
 
         # 4. Second temporal reduction with depthwise separable convolution
         # Temporal reduction: T -> T/6 (stride=2*3=6 total), Channels: 128 -> 16

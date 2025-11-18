@@ -22,8 +22,11 @@ multi_modal_CSI/
 ├── src/                        # Source code
 │   ├── models/                # Model implementations
 │   │   ├── baseline models/   # All models impelmented in the paper including AMAR
-│   │   ├── losses/            # Loss functions 
-│   │   └── modules/           # Reusable components (elements, molecules, helper)
+│   │   ├── losses/            # Hungarian Matching Loss implementation
+│   │   └── modules/           # Reusable components in models
+│   │       ├── elements.py    # Smaller modules (DSC, AC, MemoryPositionalEncoding)
+│   │       ├── molecules.py   # Larger components (RVQ, Backbone, Encoder, ...)
+│   │       └── helper.py      # helper functions (checkpoint management, ...)
 │   │
 │   ├── data/                  # Data handling
 │   │   ├── datasets.py        # Dataset classes
@@ -31,18 +34,15 @@ multi_modal_CSI/
 │   │   ├── load_data.py       # Data loading functions
 │   │   └── preprocess.py      # Preprocessing utilities
 │   │
-│   ├── utils.py               # Utility functions
-│   ├── train.py               # Main training loop
-│   ├── train_joint.py         # Joint training utilities
-│   ├── train_count.py         # Count prediction training
-│   └── train_rvq.py           # RVQ training utilities
+│   ├── utils.py               # functions inside this utility are mainly for evaluation and vizualization
+│   ├── train.py               # training function for benchmarks and also AMAR_WO_RVQ
+│   ├── train_joint.py         # training function for MultiSenseX
+│   └── train_rvq.py           # AMAR training function
 │
 ├── scripts/                   # Executable scripts
 │   ├── run_main.py           # Main experiment runner
 │   └──run_main_jointActLoc.py  # For running MultiSenseX 
 │
-├── notebooks/                 # Jupyter notebooks for analysis
-│   └── InspectingOutput.ipynb
 │
 ├── experiments/               # Experimental data
 │   └── data_splits/          # Train/test split definitions
@@ -93,7 +93,6 @@ python scripts/run_main.py --model AMAR --task activity --repeat 3 --users "0,1,
 ### Available Arguments
 
 - `--model`: Model name (default: from preset.py)
-- `--task`: Task type - `activity`, `identity`, or `location` (default: from preset.py)
 - `--repeat`: Number of experiment repetitions (default: from preset.py)
 - `--users`: Comma-separated list of user IDs (default: "0,1,2,3,4,5")
 
@@ -132,7 +131,7 @@ preset = {
 
 **Single model experiment:**
 ```bash
-python scripts/run_main.py --model AMAR --task activity
+python scripts/run_main.py --model AMAR 
 ```
 
 
