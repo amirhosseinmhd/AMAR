@@ -15,24 +15,23 @@ This repository contains the implementation of AMAR model submitted to IEEE TNNL
 ```
 multi_modal_CSI/
 ├── configs/                    # Configuration files
-│   ├── preset.py              # Main configuration file
-│   ├── modified_preset.py     # Modified presets
-│   └── config_modifier.py     # Config modification utilities
+│   └── preset.py              # Main configuration file
 │
 ├── src/                        # Source code
 │   ├── models/                # Model implementations
-│   │   ├── baseline models/   # All models impelmented in the paper including AMAR
+│   │   ├── *.py               # Implementation of models including AMAR, AMAR_WO_RVQ, DEM and 
+│   │   │                      # BCE based methods 
 │   │   ├── losses/            # Hungarian Matching Loss implementation
 │   │   └── modules/           # Reusable components in models
 │   │       ├── elements.py    # Smaller modules (DSC, AC, MemoryPositionalEncoding)
 │   │       ├── molecules.py   # Larger components (RVQ, Backbone, Encoder, ...)
 │   │       └── helper.py      # helper functions (checkpoint management, ...)
 │   │
-│   ├── data/                  # Data handling
+│   ├── data/                  # Data handling specific to WiMANS dataset
 │   │   ├── load_data.py       # Data loading functions
 │   │   └── preprocess.py      # Preprocessing utilities
 │   │
-│   ├── utils.py               # functions inside this utility are mainly for evaluation and vizualization
+│   ├── utils.py               # functions inside this utility are mainly for evaluation and viz
 │   ├── train.py               # training function for benchmarks and also AMAR_WO_RVQ
 │   ├── train_joint.py         # training function for MultiSenseX
 │   └── train_rvq.py           # AMAR training function
@@ -40,10 +39,6 @@ multi_modal_CSI/
 ├── scripts/                     # Executable scripts
 │   ├── run_main.py              # Main experiment runner
 │   └── run_main_jointActLoc.py  # For running MultiSenseX 
-│
-│
-├── experiments/               # Experimental data
-│   └── data_splits/          # Train/test split definitions
 │
 ├── results/                   # Output artifacts
 │   ├── checkpoints/          # Saved model weights
@@ -132,6 +127,18 @@ preset = {
 python scripts/run_main.py --model AMAR 
 ```
 
+## Available Models
+
+| Model | Type | Description | Reference |
+|-------|------|-------------|-----------|
+| `AMAR` | Proposed | Attention-based multi-user HAR with RVQ | This work |
+| `AMAR_WO_RVQ` | Proposed | AMAR without quantization | This work |
+| `BCE_ABLSTM` | Baseline | Attention-based Bi-directional LSTM + BCE loss | [Chen et al., TMC'19](https://doi.org/10.1109/TMC.2018.2878233) |
+| `BCE_THAT` | Baseline | Two-stream Transformer + BCE loss | [Li et al., AAAI'21](https://ojs.aaai.org/index.php/AAAI/article/view/16103) |
+| `DEM_ABLSTM` | Baseline | Attention-based Bi-directional LSTM + Smooth L1 | [Chen et al., TMC'19](https://doi.org/10.1109/TMC.2018.2878233) |
+| `DEM_THAT` | Baseline | Two-stream Transformer + Smooth L1 | [Li et al., AAAI'21](https://ojs.aaai.org/index.php/AAAI/article/view/16103) |
+
+**Note:** BCE variants follow the WiMANS dataset formulation [[Huang et al., arXiv'24]](https://arxiv.org/abs/2402.09430) for multi-label classification. DEM variants use regression to predict activity counts directly.
 
 
 
@@ -180,14 +187,6 @@ Adjust neural network settings in the `nn` section:
 }
 ```
 
-## Available Models
-
-### Baseline Models
-- `ABLSTM`: Attention-based LSTM
-- `DEM_ABLSTM`: ABLSTM for DEM
-- `THAT`: Transformer-based model
-- `DEM_THAT`: THAT DEM
-- `AMAR`: AMAR with Residual Vector Quantization
 
 ## Project Organization
 
@@ -195,7 +194,7 @@ Adjust neural network settings in the `nn` section:
 - **models/**: All model implementations with their forward passes and training functions
 - **data/**: Data loading, preprocessing, and dataset creation utilities
 - **utils.py**: Helper functions for metrics, visualization, and data manipulation
-- **train*.py**: Training loop implementations for different model types
+- **train\*.py**: Training loop implementations for different model types
 
 ### Scripts (`scripts/`)
 - Executable entry points for running experiments
