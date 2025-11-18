@@ -29,8 +29,6 @@ multi_modal_CSI/
 │   │       └── helper.py      # helper functions (checkpoint management, ...)
 │   │
 │   ├── data/                  # Data handling
-│   │   ├── datasets.py        # Dataset classes
-│   │   ├── sampling.py        # Data sampling utilities
 │   │   ├── load_data.py       # Data loading functions
 │   │   └── preprocess.py      # Preprocessing utilities
 │   │
@@ -39,9 +37,9 @@ multi_modal_CSI/
 │   ├── train_joint.py         # training function for MultiSenseX
 │   └── train_rvq.py           # AMAR training function
 │
-├── scripts/                   # Executable scripts
-│   ├── run_main.py           # Main experiment runner
-│   └──run_main_jointActLoc.py  # For running MultiSenseX 
+├── scripts/                     # Executable scripts
+│   ├── run_main.py              # Main experiment runner
+│   └── run_main_jointActLoc.py  # For running MultiSenseX 
 │
 │
 ├── experiments/               # Experimental data
