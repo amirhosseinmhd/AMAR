@@ -63,7 +63,7 @@ multi_modal_CSI/
 
 ```bash
 conda env create -f environment.yaml
-conda activate WiMANS
+conda activate AMAR
 ```
 
 ### 2. Verify Installation
@@ -80,7 +80,7 @@ python -c "import wandb; print('wandb installed')"
 Run a single experiment with default settings:
 
 ```bash
-conda activate WiMANS
+conda activate AMAR
 python scripts/run_main.py
 ```
 
