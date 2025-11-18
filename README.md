@@ -80,13 +80,13 @@ Download the WiMANS dataset from [Kaggle](https://www.kaggle.com/datasets/shuoka
 
 <table align="center">
   <tr align="center">
-    <td rowspan="2"><b>Sample "act_30_25"</b></td>
-    <td>WiFi CSI (5GHz)</td>
+    <td rowspan="2"><b>Sample includes these activities:<br>Walking, Sitting Down, and Picking Up</b></td>
+    <td>WiFi CSI</td>
     <td>Synchronized Video</td>
   </tr>
   <tr align="center">
-    <td><img src="visualize/wifi_csi_act_30_25.gif" height="188"/></td>
-    <td><img src="visualize/video_act_30_25.gif" height="188"></td>
+    <td><img src="visualizations/wifi_csi_act_30_25.gif" height="188"/></td>
+    <td><img src="visualizations/video_act_30_25.gif" height="188"></td>
   </tr>
 </table>
 

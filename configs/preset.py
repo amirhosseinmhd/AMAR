@@ -16,7 +16,7 @@ preset = {
     "task": "activity",                                 #  "activity"
     #
     ## number of repeated experiments
-    "repeat": 2,
+    "repeat": 8,
     ## path of data
     "path": {
         "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
