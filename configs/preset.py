@@ -8,7 +8,7 @@ import os
 preset = {
     #
     ## define model
-    "model": "AMAR_WO_RVQ",                                    #  BCE_ABLSTM, BCE_THAT, DEM_ABLSTM
+    "model": "AMAR",                                    #  BCE_ABLSTM, BCE_THAT, DEM_ABLSTM
                                                               #  DEM_THAT",  AMAR, AMAR_WO_RVQ
                                                             
     # "model": "MLP",
@@ -19,8 +19,8 @@ preset = {
     "repeat": 8,
     ## path of data
     "path": {
-        "data_x": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/wifi_csi/amp",  # directory of CSI amplitude files
-        "data_y": "/local/data0/amir/PUBLIC_DATASET/wimans_dataset/annotation.csv",  # path of annotation file
+        "data_x": "/path_to_data/wifi_csi/amp",  # directory of CSI amplitude files
+        "data_y": "/path_to_data/annotation.csv",  # path of annotation file
         "save": "results/result.json"                           # path to save results
     },
     #
@@ -35,7 +35,7 @@ preset = {
     ## hyperparameters of models
     "nn": {
         "lr": 5e-4,                                     # learning rate
-        "epoch": 1,                                   # number of epochs
+        "epoch": 300,                                   # number of epochs
         "batch_size":16,                              # batch size
         "threshold": 0.5,                               # threshold to binarize sigmoid outputs
         "scheduler": {
@@ -55,7 +55,7 @@ preset = {
         "num_obj_queries": 6,
         "num_decoder_layers":6,
         "dim_FFN": 512,
-        "token_length": 188, #74
+        "token_length": 188, 
         "d_embedding": 64,
         "n_layers_encoder":4,
         "n_attention_heads": 4,
@@ -99,4 +99,3 @@ preset = {
 }
 
 
-preset["wandb_name"] = "N_LAYERS_" + str(preset["nn"]["num_rvq_layers"]) + "Num_Codes_" + str(preset["nn"]["num_codes"])
